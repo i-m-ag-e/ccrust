@@ -36,6 +36,8 @@ lazy_static! {
     };
 }
 
+const PUNCTUATORS: [char; 11] = [',', '.', '{', '(', '}', ')', ';', '!', '&', '|', '^'];
+
 #[derive(Error, Debug)]
 pub enum LexerErrorType {
     #[error("unexpected EOF")]
@@ -95,10 +97,8 @@ impl<'a> Lexer<'a> {
 
     fn peek_next(&self) -> Option<char> {
         let mut iter = self.input.clone();
-        match iter.next() {
-            Some(_) => iter.next(),
-            None => None,
-        }
+        iter.next();
+        iter.next()
     }
 
     fn advance(&mut self) -> Option<char> {
@@ -134,10 +134,24 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace(&mut self) {
         loop {
             match self.peek() {
-                Some('\r' | '\t' | ' ') => self.advance(),
+                Some('\r' | '\t' | ' ') => {
+                    self.advance();
+                }
                 Some('\n') => {
                     self.line += 1;
-                    self.advance()
+                    self.advance();
+                }
+                Some('/') => {
+                    if let Some('/') = self.peek_next() {
+                        self.advance();
+                        self.advance();
+                        while let Some(c) = self.advance() {
+                            if c == '\n' {
+                                self.line += 1;
+                                break;
+                            }
+                        }
+                    }
                 }
                 _ => break,
             };
@@ -162,31 +176,27 @@ impl<'a> Lexer<'a> {
 
     fn number(&mut self) -> LexerResult {
         while let Some(c) = self.peek() {
-            if c.is_ascii_whitespace() || c == '.' {
+            if c.is_ascii_whitespace() || PUNCTUATORS.contains(&c) {
                 break;
             }
             self.advance_if_digit("decimal", c)?;
-            // if let '0'..='9' = c {
-            //     self.advance();
-            // } else {
-            //     return Err(self.make_error(LexerErrorType::InvalidDigit {
-            //         lit_type: "decimal",
-            //         digit: c,
-            //     }));
-            // }
         }
 
         if let Some('.') = self.peek() {
             self.advance();
             while let Some(c) = self.peek() {
-                if c.is_ascii_whitespace() {
+                if c.is_ascii_whitespace() || (c != '.' && PUNCTUATORS.contains(&c)) {
                     break;
                 }
                 self.advance_if_digit("decimal", c)?;
             }
-            Ok(self.make_token(TokenType::Literal(Literal::Float)))
+            let lexeme = self.get_lexeme().to_string();
+            let float = lexeme.parse::<f64>().unwrap_or_else(|_| unreachable!());
+            Ok(self.make_token(TokenType::Literal(Literal::Float(float))))
         } else {
-            Ok(self.make_token(TokenType::Literal(Literal::Integer)))
+            let lexeme = self.get_lexeme().to_string();
+            let int = lexeme.parse::<i64>().unwrap_or_else(|_| unreachable!());
+            Ok(self.make_token(TokenType::Literal(Literal::Integer(int))))
         }
     }
 
@@ -293,8 +303,8 @@ impl<'a> Lexer<'a> {
         self.skip_whitespace();
 
         self.start = self.current;
-        let c = if let Some(c) = self.advance() {
-            c
+        let c = if let Some(_) = self.peek() {
+            self.advance().unwrap()
         } else {
             self.eof = true;
             return Ok(self.make_token(TokenType::EOF));

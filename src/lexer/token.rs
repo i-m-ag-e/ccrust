@@ -1,12 +1,12 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Char(char),
-    Float,
-    Integer,
+    Float(f64),
+    Integer(i64),
     String(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Comma,
     Dot,
