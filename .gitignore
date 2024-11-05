@@ -1,5 +1,4 @@
 /target
 Cargo.lock
 grammar.ebnf
-hello.c 
-out.txt
+files/
