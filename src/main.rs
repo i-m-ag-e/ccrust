@@ -1,19 +1,26 @@
+// use rustcc::asmgen::AsmGen;
+use rustcc::asm::{self, Program};
 use rustcc::lexer::token::{Token, TokenType};
 use rustcc::lexer::Lexer;
+use rustcc::parser::Parser;
+use rustcc::tacky::GenerateTacky;
 use std::env;
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     println!("args: {:?}", args);
 
-    let text = if let Some(path) = args.get(1) {
-        fs::read_to_string(path)?
+    let (text, path) = if let Some(path) = args.get(1) {
+        (fs::read_to_string(path)?, Path::new(path))
     } else {
         panic!("Invalid no. of arguments");
     };
 
     let mut lexer = Lexer::new(&text);
+    let mut tokens = Vec::new();
     let mut token = lexer.next_token();
     while let Ok(ref tok) = token {
         println!(
@@ -25,6 +32,7 @@ fn main() -> std::io::Result<()> {
                 ""
             }
         );
+        tokens.push(tok.clone());
         if let Token {
             tok_type: TokenType::EOF,
             ..
@@ -44,5 +52,56 @@ fn main() -> std::io::Result<()> {
             err.error
         );
     }
+
+    let mut parser = Parser::new(&text, tokens);
+    let program = parser.program();
+
+    match program {
+        Ok(program) => {
+            println!("AST: {:#?}\n", program);
+
+            let tacky = GenerateTacky::new().generate(&program);
+            let asm = Program::from(&tacky);
+            let asm_string = asm.to_asm_string();
+
+            println!("Tacky: {:#?}\n", tacky);
+            println!("ASM: {:#?}\n", asm);
+            println!("ASM:\n{}", asm_string);
+            let asm_file_path = path.with_extension("s");
+
+            fs::write(&asm_file_path, &asm_string)?;
+
+            let assemble_success = Command::new("gcc")
+                .arg(
+                    path.to_str()
+                        .expect("path is not valid Unicode")
+                        .to_string(),
+                )
+                .args(["-o", asm_file_path.with_extension("").to_str().unwrap()])
+                .spawn()
+                .expect("could not begin compilation using gcc")
+                .wait()
+                .expect("could not compile using gcc")
+                .success();
+
+            if assemble_success {
+                println!("Compiled successfully");
+                fs::remove_file(asm_file_path)?;
+            } else {
+                eprintln!("Compile failure");
+            }
+        }
+        Err(err) => {
+            println!("{:?}", err);
+            eprintln!(
+                "Error {}:{} (at ({:?}):: {}",
+                err.token.line,
+                err.token.span.0,
+                &text[err.token.span.0..err.token.span.1],
+                err.error
+            );
+        }
+    }
+
     Ok(())
 }
