@@ -2,6 +2,8 @@
 use rustcc::asm::{self, Program};
 use rustcc::lexer::token::{Token, TokenType};
 use rustcc::lexer::Lexer;
+use rustcc::parser::ast::ASTVisitor;
+use rustcc::parser::pretty_print_ast::PrettyPrint;
 use rustcc::parser::Parser;
 use rustcc::tacky::GenerateTacky;
 use std::env;
@@ -58,7 +60,7 @@ fn main() -> std::io::Result<()> {
 
     match program {
         Ok(program) => {
-            println!("AST: {:#?}\n", program);
+            println!("AST:\n{}\n", PrettyPrint::new().visit_program(&program));
 
             let tacky = GenerateTacky::new().generate(&program);
             let asm = Program::from(&tacky);

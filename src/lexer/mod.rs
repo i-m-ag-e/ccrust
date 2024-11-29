@@ -17,11 +17,20 @@ macro_rules! hash_map {
 }
 
 macro_rules! multi_char_tok {
-    ( $self: ident => $c: literal ? $yes: expr ; $no: expr ) => {
-        if $self.advance_if_eq($c) {
-            Ok($self.make_token($yes))
-        } else {
-            Ok($self.make_token($no))
+    ( $self: ident, $orig: expr; $( $c: literal => $tt: expr ),+ $(,)? ) => {
+        // if $self.advance_if_eq($c) {
+        //     Ok($self.make_token($yes))
+        // } else {
+        //     Ok($self.make_token($no))
+        // }
+        match $self.peek() {
+            $(
+                Some($c) => {
+                    $self.advance();
+                    Ok($self.make_token($tt))
+                }
+            )+
+            _ => Ok($self.make_token($orig))
         }
     };
 }
@@ -151,20 +160,12 @@ impl<'a> Lexer<'a> {
                                 break;
                             }
                         }
+                    } else {
+                        break;
                     }
                 }
                 _ => break,
             };
-        }
-    }
-
-    fn advance_if_eq(&mut self, c: char) -> bool {
-        match self.peek() {
-            Some(ch) if c == ch => {
-                self.advance();
-                true
-            }
-            _ => false,
         }
     }
 
@@ -319,15 +320,19 @@ impl<'a> Lexer<'a> {
             ')' => Ok(self.make_token(TokenType::RParen)),
             ';' => Ok(self.make_token(TokenType::Semicolon)),
 
-            '!' => multi_char_tok!(self => '=' ? TokenType::BangEq; TokenType::Bang),
-            '&' => multi_char_tok!(self => '&' ? TokenType::And; TokenType::BitwiseAND),
-            '|' => multi_char_tok!(self => '|' ? TokenType::Or; TokenType::BitwiseOR),
+            '!' => multi_char_tok!(self, TokenType::Bang; '=' => TokenType::BangEq),
+            '&' => multi_char_tok!(self, TokenType::BitwiseAND; '&' => TokenType::And),
+            '|' => multi_char_tok!(self, TokenType::BitwiseOR; '|' => TokenType::Or),
             '^' => Ok(self.make_token(TokenType::BitwiseXOR)),
-            '-' => multi_char_tok!(self => '-' ? TokenType::Decrement; TokenType::Minus),
-            '=' => multi_char_tok!(self => '=' ? TokenType::EqEqual; TokenType::Equal),
-            '>' => multi_char_tok!(self => '=' ? TokenType::GreaterEq; TokenType::Greater),
-            '<' => multi_char_tok!(self => '=' ? TokenType::LesserEq; TokenType::Lesser),
-            '+' => multi_char_tok!(self => '+' ? TokenType::Increment; TokenType::Plus),
+            '-' => multi_char_tok!(self, TokenType::Minus; '-' => TokenType::Decrement),
+            '=' => multi_char_tok!(self, TokenType::Equal; '=' => TokenType::EqEqual),
+            '>' => multi_char_tok!(self, TokenType::Greater;
+                                         '=' => TokenType::GreaterEq,
+                                         '>' => TokenType::RShift),
+            '<' => multi_char_tok!(self, TokenType::Lesser;
+                                         '=' => TokenType::LesserEq,
+                                         '<' => TokenType::LShift),
+            '+' => multi_char_tok!(self, TokenType::Plus; '+' => TokenType::Increment),
             '%' => Ok(self.make_token(TokenType::Perc)),
             '*' => Ok(self.make_token(TokenType::Star)),
             '/' => Ok(self.make_token(TokenType::Slash)),

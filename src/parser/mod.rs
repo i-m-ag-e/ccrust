@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod pretty_print_ast;
 
 use crate::lexer::token::{self, Span, Token, TokenType};
 use ast::*;
@@ -9,9 +10,29 @@ use thiserror::Error;
 // <function-decl>  ::= "int" <identifier> "(" "void" ")" "{" <function-body> "}"
 // <function-body>  ::= (<statement> ";")*
 // <statement>      ::= "return" <expr>
-// <expr>           ::= <constant> | <unary-op> <expr> | "(" <expr> ")"
+// <expr>           ::= <term>
+// <term>           ::= <factor> ( ( "+" | "-" ) <factor> )?
+// <factor>         ::= <unary> ( ( "*" | "/" | "%" ) <unary> )?
+// <unary>          ::= <unary-op>? <primary>
+// <primary>        ::= <constant> | "(" <expr> ")"
 // <unary-op>       ::= "-" | "~"
 // <constant>       ::= <integer>
+
+macro_rules! parse_binary_expr {
+    ( $self: ident, $ops: pat, $nextp: ident ) => {{
+        let mut lhs = $self.$nextp()?;
+        while let Some($ops) = $self.peek_token_type() {
+            let op = binary_tt_to_op(&$self.advance().unwrap().tok_type);
+            let rhs = Box::new($self.$nextp()?);
+            lhs = Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs,
+            }
+        }
+        Ok(lhs)
+    }};
+}
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -195,7 +216,79 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> ParseResult<Expr> {
-        self.unary()
+        self.or()
+    }
+
+    fn or(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::Or, and)
+    }
+
+    fn and(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::And, bitwise_or)
+    }
+
+    fn bitwise_or(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::BitwiseOR, bitwise_xor)
+    }
+
+    fn bitwise_xor(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::BitwiseXOR, bitwise_and)
+    }
+
+    fn bitwise_and(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::BitwiseAND, equality)
+    }
+
+    fn equality(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::EqEqual | TokenType::BangEq, comparison)
+    }
+
+    fn comparison(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(
+            self,
+            TokenType::Greater | TokenType::GreaterEq | TokenType::Lesser | TokenType::LesserEq,
+            shifts
+        )
+    }
+
+    fn shifts(&mut self) -> ParseResult<Expr> {
+        parse_binary_expr!(self, TokenType::LShift | TokenType::RShift, term)
+    }
+
+    fn term(&mut self) -> ParseResult<Expr> {
+        // let lhs = self.factor()?;
+        // if let Some(TokenType::Plus | TokenType::Minus) = self.peek_token_type() {
+        //     let op = binary_tt_to_op(&self.advance().unwrap().tok_type);
+        //     let rhs = Box::new(self.term()?);
+        //     Ok(Expr::Binary {
+        //         op,
+        //         lhs: Box::new(lhs),
+        //         rhs,
+        //     })
+        // } else {
+        //     Ok(lhs)
+        // }
+        parse_binary_expr!(self, TokenType::Plus | TokenType::Minus, factor)
+    }
+
+    fn factor(&mut self) -> ParseResult<Expr> {
+        // let lhs = self.unary()?;
+        // if let Some(TokenType::Star | TokenType::Slash | TokenType::Perc) = self.peek_token_type() {
+        //     let op = binary_tt_to_op(&self.advance().unwrap().tok_type);
+        //     let rhs = Box::new(self.factor()?);
+        //     Ok(Expr::Binary {
+        //         op,
+        //         lhs: Box::new(lhs),
+        //         rhs,
+        //     })
+        // } else {
+        //     Ok(lhs)
+        // }
+        parse_binary_expr!(
+            self,
+            TokenType::Star | TokenType::Slash | TokenType::Perc,
+            unary
+        )
     }
 
     fn unary(&mut self) -> ParseResult<Expr> {
@@ -249,6 +342,30 @@ fn unary_tt_to_op(tt: &TokenType) -> UnaryOp {
     match tt {
         TokenType::Minus => UnaryOp::Minus,
         TokenType::Tilde => UnaryOp::BitNOT,
+        _ => unreachable!(),
+    }
+}
+
+fn binary_tt_to_op(tt: &TokenType) -> BinaryOp {
+    match tt {
+        TokenType::Minus => BinaryOp::Minus,
+        TokenType::Plus => BinaryOp::Plus,
+        TokenType::Star => BinaryOp::Mul,
+        TokenType::Slash => BinaryOp::Div,
+        TokenType::Perc => BinaryOp::Mod,
+        TokenType::BitwiseAND => BinaryOp::BitwiseAND,
+        TokenType::BitwiseOR => BinaryOp::BitwiseOR,
+        TokenType::BitwiseXOR => BinaryOp::BitwiseXOR,
+        TokenType::LShift => BinaryOp::LShift,
+        TokenType::RShift => BinaryOp::RShift,
+        TokenType::EqEqual => BinaryOp::Eq,
+        TokenType::BangEq => BinaryOp::NotEq,
+        TokenType::And => BinaryOp::And,
+        TokenType::Or => BinaryOp::Or,
+        TokenType::Greater => BinaryOp::Greater,
+        TokenType::GreaterEq => BinaryOp::GreaterEq,
+        TokenType::Lesser => BinaryOp::Lesser,
+        TokenType::LesserEq => BinaryOp::LesserEq,
         _ => unreachable!(),
     }
 }
