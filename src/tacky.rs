@@ -138,6 +138,34 @@ impl ExprRefVisitor<Value> for GenerateTacky {
         }
     }
 
+    fn visit_conditional(&mut self, expr: &ast::Conditional) -> Value {
+        let else_label = self.new_label("else_condexpr");
+        let end_label = self.new_label("end_condexpr");
+
+        let result = self.visit_expr(&expr.cond);
+        self.current_body
+            .push(Instruction::JumpIfZero(result, else_label.clone()));
+
+        let dst = self.new_var();
+
+        let res_if = self.visit_expr(&expr.then_expr);
+        self.current_body.push(Instruction::Copy {
+            src: res_if,
+            dst: dst.clone(),
+        });
+        self.current_body.push(Instruction::Jump(end_label.clone()));
+
+        self.current_body.push(Instruction::Label(else_label));
+        let res_else = self.visit_expr(&expr.else_expr);
+        self.current_body.push(Instruction::Copy {
+            src: res_else,
+            dst: dst.clone(),
+        });
+
+        self.current_body.push(Instruction::Label(end_label));
+        dst
+    }
+
     fn visit_literal(&mut self, literal: &ast::WithToken<Literal>) -> Value {
         Value::Literal(**literal)
     }
@@ -159,6 +187,28 @@ impl ExprRefVisitor<Value> for GenerateTacky {
 impl StmtRefVisitor<()> for GenerateTacky {
     fn visit_expression(&mut self, expr: &ast::Expr) -> () {
         self.visit_expr(expr);
+    }
+
+    fn visit_if(&mut self, if_stmt: &ast::IfStmt) -> () {
+        let (jump_not_true, end_label) = if if_stmt.else_clause.is_some() {
+            (self.new_label("else"), self.new_label("end_if"))
+        } else {
+            (self.new_label("end_if"), self.new_label("end_if"))
+        };
+
+        let result = self.visit_expr(&if_stmt.cond);
+        self.current_body
+            .push(Instruction::JumpIfZero(result, jump_not_true.clone()));
+
+        self.visit_stmt(&if_stmt.then);
+
+        if let Some(ref else_clause) = if_stmt.else_clause {
+            self.current_body.push(Instruction::Jump(end_label.clone()));
+            self.current_body.push(Instruction::Label(jump_not_true));
+            self.visit_stmt(&else_clause);
+        }
+
+        self.current_body.push(Instruction::Label(end_label));
     }
 
     fn visit_null(&mut self) -> () {}

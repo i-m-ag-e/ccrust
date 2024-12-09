@@ -45,8 +45,9 @@ lazy_static! {
     };
 }
 
-const PUNCTUATORS: [char; 18] = [
-    ',', '.', '{', '(', '}', ')', ';', '!', '&', '|', '^', '=', '>', '<', '+', '-', '*', '/',
+const PUNCTUATORS: [char; 20] = [
+    ',', '.', '{', '(', '}', ')', ';', '!', '&', '|', '^', '=', '>', '<', '+', '-', '*', '/', '?',
+    ':',
 ];
 
 #[derive(Error, Debug)]
@@ -315,9 +316,11 @@ impl<'a> Lexer<'a> {
 
         match c {
             ',' => Ok(self.make_token(TokenType::Comma)),
+            ':' => Ok(self.make_token(TokenType::Colon)),
             '.' => Ok(self.make_token(TokenType::Dot)),
             '{' => Ok(self.make_token(TokenType::LBrace)),
             '(' => Ok(self.make_token(TokenType::LParen)),
+            '?' => Ok(self.make_token(TokenType::QMark)),
             '}' => Ok(self.make_token(TokenType::RBrace)),
             ')' => Ok(self.make_token(TokenType::RParen)),
             ';' => Ok(self.make_token(TokenType::Semicolon)),

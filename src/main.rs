@@ -1,5 +1,4 @@
 use colored::Colorize;
-// use rustcc::asmgen::AsmGen;
 use rustcc::asm::Program;
 use rustcc::lexer::token::{Token, TokenType};
 use rustcc::lexer::Lexer;
@@ -116,7 +115,7 @@ fn main() -> std::io::Result<()> {
 
             if assemble_success {
                 println!("Compiled successfully");
-                fs::remove_file(asm_file_path)?;
+                // fs::remove_file(asm_file_path)?;
             } else {
                 eprintln!("Compile failure");
             }

@@ -8,6 +8,7 @@ use super::ast::WithToken;
 pub enum Expr {
     Assign(Assign),
     Binary(Binary),
+    Conditional(Conditional),
     Literal(WithToken<Literal>),
     Unary(Unary),
     Var(WithToken<String>),
@@ -31,6 +32,13 @@ pub struct Binary {
 pub struct Unary {
     pub op: WithToken<UnaryOp>,
     pub expr: Box<Expr>,
+}
+
+#[derive(Debug)]
+pub struct Conditional {
+    pub cond: Box<Expr>,
+    pub then_expr: Box<Expr>,
+    pub else_expr: Box<Expr>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +122,7 @@ pub enum Literal {
 pub trait ExprRefVisitor<R> {
     fn visit_assign(&mut self, expr: &Assign) -> R;
     fn visit_binary(&mut self, expr: &Binary) -> R;
+    fn visit_conditional(&mut self, expr: &Conditional) -> R;
     fn visit_literal(&mut self, literal: &WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: &Unary) -> R;
     fn visit_var(&mut self, name: &WithToken<String>) -> R;
@@ -122,6 +131,7 @@ pub trait ExprRefVisitor<R> {
 pub trait ExprVisitor<R> {
     fn visit_assign(&mut self, expr: Assign) -> R;
     fn visit_binary(&mut self, expr: Binary) -> R;
+    fn visit_conditional(&mut self, expr: Conditional) -> R;
     fn visit_literal(&mut self, literal: WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: Unary) -> R;
     fn visit_var(&mut self, name: WithToken<String>) -> R;

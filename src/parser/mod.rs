@@ -100,18 +100,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // fn match_one_of(&mut self, tok_types: &[TokenType]) -> bool {
-    //     match self.peek() {
-    //         Some(Token {
-    //             tok_type: ttype, ..
-    //         }) if tok_types.contains(ttype) => {
-    //             self.advance();
-    //             true
-    //         }
-    //         _ => false,
-    //     }
-    // }
-
     fn consume(&mut self, tok_type: TokenType, exp: &'static str) -> ParseResult<Token> {
         match self.peek() {
             Some(Token {
@@ -259,7 +247,7 @@ impl<'a> Parser<'a> {
     }
 
     fn assignment(&mut self) -> ParseResult<Expr> {
-        let mut lhs = self.or()?;
+        let mut lhs = self.conditional_expr()?;
         if let Some(TokenType::Equal) = self.peek_token_type() {
             let eq_sign = self.advance().unwrap();
             let rhs = Box::new(self.assignment()?);
@@ -270,6 +258,24 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(lhs)
+    }
+
+    fn conditional_expr(&mut self) -> ParseResult<Expr> {
+        let cond = self.or()?;
+        if let Some(TokenType::QMark) = self.peek_token_type() {
+            self.advance();
+            let then_expr = Box::new(self.expression()?);
+            self.consume(TokenType::Colon, ";")?;
+            let else_expr = Box::new(self.conditional_expr()?);
+
+            Ok(Expr::Conditional(Conditional {
+                cond: Box::new(cond),
+                then_expr,
+                else_expr,
+            }))
+        } else {
+            Ok(cond)
+        }
     }
 
     fn or(&mut self) -> ParseResult<Expr> {
@@ -309,34 +315,10 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> ParseResult<Expr> {
-        // let lhs = self.factor()?;
-        // if let Some(TokenType::Plus | TokenType::Minus) = self.peek_token_type() {
-        //     let op = binary_tt_to_op(&self.advance().unwrap().tok_type);
-        //     let rhs = Box::new(self.term()?);
-        //     Ok(Expr::Binary {
-        //         op,
-        //         lhs: Box::new(lhs),
-        //         rhs,
-        //     })
-        // } else {
-        //     Ok(lhs)
-        // }
         parse_binary_expr!(self, TokenType::Plus | TokenType::Minus, factor)
     }
 
     fn factor(&mut self) -> ParseResult<Expr> {
-        // let lhs = self.unary()?;
-        // if let Some(TokenType::Star | TokenType::Slash | TokenType::Perc) = self.peek_token_type() {
-        //     let op = binary_tt_to_op(&self.advance().unwrap().tok_type);
-        //     let rhs = Box::new(self.factor()?);
-        //     Ok(Expr::Binary {
-        //         op,
-        //         lhs: Box::new(lhs),
-        //         rhs,
-        //     })
-        // } else {
-        //     Ok(lhs)
-        // }
         parse_binary_expr!(
             self,
             TokenType::Star | TokenType::Slash | TokenType::Perc,
@@ -416,6 +398,7 @@ impl<'a> Parser<'a> {
 
     fn statement(&mut self) -> ParseResult<Stmt> {
         match self.peek_token_type() {
+            Some(TokenType::KIf) => self.if_stmt(),
             Some(TokenType::KReturn) => self.return_statement(),
             Some(TokenType::Semicolon) => {
                 self.advance();
@@ -423,6 +406,28 @@ impl<'a> Parser<'a> {
             }
             _ => self.expression_statement(),
         }
+    }
+
+    fn if_stmt(&mut self) -> ParseResult<Stmt> {
+        self.advance();
+
+        self.consume(TokenType::LParen, "(")?;
+        let cond = self.expression()?;
+        self.consume(TokenType::RParen, ")")?;
+
+        let then = Box::new(self.statement()?);
+        let else_clause = if let Some(TokenType::KElse) = self.peek_token_type() {
+            self.advance();
+            Some(Box::new(self.statement()?))
+        } else {
+            None
+        };
+
+        Ok(Stmt::If(IfStmt {
+            cond,
+            then,
+            else_clause,
+        }))
     }
 
     fn return_statement(&mut self) -> ParseResult<Stmt> {
