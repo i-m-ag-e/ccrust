@@ -74,6 +74,7 @@ pub trait ASTRefVisitor:
     fn visit_stmt(&mut self, stmt: &Stmt) -> Self::StmtResult {
         match stmt {
             Stmt::Expression(expr) => self.visit_expression(expr),
+            Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::Null => self.visit_null(),
             Stmt::Return { ret_value } => self.visit_return(ret_value),
         }
@@ -83,6 +84,7 @@ pub trait ASTRefVisitor:
         match expr {
             Expr::Assign(assign) => self.visit_assign(assign),
             Expr::Binary(binary) => self.visit_binary(binary),
+            Expr::Conditional(cond) => self.visit_conditional(cond),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),
             Expr::Var(name) => self.visit_var(name),
@@ -108,6 +110,7 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
     fn visit_stmt(&mut self, stmt: Stmt) -> Self::StmtResult {
         match stmt {
             Stmt::Expression(expr) => self.visit_expression(expr),
+            Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::Null => self.visit_null(),
             Stmt::Return { ret_value } => self.visit_return(ret_value),
         }
@@ -117,6 +120,7 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
         match expr {
             Expr::Assign(assign) => self.visit_assign(assign),
             Expr::Binary(binary) => self.visit_binary(binary),
+            Expr::Conditional(cond) => self.visit_conditional(cond),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),
             Expr::Var(name) => self.visit_var(name),

@@ -26,6 +26,14 @@ impl PrettyPrint {
     pub fn new() -> Self {
         Self { indent: 0 }
     }
+
+    fn indent_now(&self) -> String {
+        Self::INDENT.repeat(self.indent - 1)
+    }
+
+    fn indent_inside(&self) -> String {
+        Self::INDENT.repeat(self.indent)
+    }
 }
 
 impl ExprRefVisitor<String> for PrettyPrint {
@@ -53,6 +61,30 @@ impl ExprRefVisitor<String> for PrettyPrint {
             self.visit_expr(rhs),
             Self::INDENT.repeat(self.indent),
             Self::INDENT.repeat(self.indent - 1)
+        );
+
+        self.indent -= 1;
+        expr_str
+    }
+
+    fn visit_conditional(&mut self, expr: &Conditional) -> String {
+        self.indent += 1;
+
+        let cond_str = self.visit_expr(&expr.cond);
+        self.indent += 1;
+        let then_str = self.visit_expr(&expr.then_expr);
+        let else_str = self.visit_expr(&expr.else_expr);
+        self.indent -= 1;
+
+        let expr_str = format!(
+            "{0}\n{6}{1}\n{6}{2}   {3}\n{6}{4}   {5}",
+            "CONDITIONAL".cyan().bold(),
+            cond_str,
+            "?".yellow(),
+            then_str,
+            ":".yellow(),
+            else_str,
+            self.indent_inside()
         );
 
         self.indent -= 1;
@@ -97,6 +129,30 @@ impl StmtRefVisitor<String> for PrettyPrint {
         );
         self.indent -= 1;
         expr_str
+    }
+
+    fn visit_if(&mut self, if_stmt: &IfStmt) -> String {
+        self.indent += 1;
+        let cond_str = format!(
+            "{0}{1}\x0b{2}\n{0}  {3}\n{4}{5}",
+            self.indent_now(),
+            "IF".red(),
+            self.visit_expr(&if_stmt.cond),
+            "THEN".magenta(),
+            self.visit_stmt(&*if_stmt.then),
+            if let Some(ref else_clause) = if_stmt.else_clause {
+                format!(
+                    "\n{0}  {1}\n{2}",
+                    self.indent_now(),
+                    "ELSE".magenta(),
+                    self.visit_stmt(else_clause)
+                )
+            } else {
+                "".to_string()
+            }
+        );
+        self.indent -= 1;
+        cond_str
     }
 
     fn visit_null(&mut self) -> String {

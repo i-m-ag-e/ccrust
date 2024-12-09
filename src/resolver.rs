@@ -65,6 +65,14 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
         }))
     }
 
+    fn visit_conditional(&mut self, expr: Conditional) -> ResolveResult<Expr> {
+        Ok(Expr::Conditional(Conditional {
+            cond: Box::new(self.visit_expr(*expr.cond)?),
+            then_expr: Box::new(self.visit_expr(*expr.then_expr)?),
+            else_expr: Box::new(self.visit_expr(*expr.else_expr)?),
+        }))
+    }
+
     fn visit_literal(&mut self, lit: WithToken<Literal>) -> ResolveResult<Expr> {
         Ok(Expr::Literal(lit))
     }
@@ -92,6 +100,19 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
     fn visit_expression(&mut self, expr: Expr) -> ResolveResult<Stmt> {
         Ok(Stmt::Expression(self.visit_expr(expr)?))
     }
+
+    fn visit_if(&mut self, if_stmt: IfStmt) -> ResolveResult<Stmt> {
+        Ok(Stmt::If(IfStmt {
+            cond: self.visit_expr(if_stmt.cond)?,
+            then: Box::new(self.visit_stmt(*if_stmt.then)?),
+            else_clause: if_stmt
+                .else_clause
+                .map(|ec| self.visit_stmt(*ec))
+                .transpose()?
+                .map(Box::new),
+        }))
+    }
+
     fn visit_null(&mut self) -> ResolveResult<Stmt> {
         Ok(Stmt::Null)
     }
