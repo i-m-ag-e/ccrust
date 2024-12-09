@@ -45,7 +45,9 @@ lazy_static! {
     };
 }
 
-const PUNCTUATORS: [char; 11] = [',', '.', '{', '(', '}', ')', ';', '!', '&', '|', '^'];
+const PUNCTUATORS: [char; 18] = [
+    ',', '.', '{', '(', '}', ')', ';', '!', '&', '|', '^', '=', '>', '<', '+', '-', '*', '/',
+];
 
 #[derive(Error, Debug)]
 pub enum LexerErrorType {

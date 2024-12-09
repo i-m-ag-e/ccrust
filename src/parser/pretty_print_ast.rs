@@ -28,7 +28,102 @@ impl PrettyPrint {
     }
 }
 
-impl ASTVisitor<String> for PrettyPrint {
+impl ExprRefVisitor<String> for PrettyPrint {
+    fn visit_assign(&mut self, expr: &Assign) -> String {
+        self.indent += 1;
+        let expr_str = format!(
+            "({} {} {})",
+            self.visit_expr(&expr.lhs),
+            "=".yellow().to_string(),
+            self.visit_expr(&expr.rhs)
+        );
+        self.indent -= 1;
+        expr_str
+    }
+
+    fn visit_binary(&mut self, expr: &Binary) -> String {
+        let Binary { op, lhs, rhs } = expr;
+        self.indent += 1;
+
+        let expr_str = format!(
+            "{0}(\"{1}\",\n{4}{2},\n{4}{3}\n{5})",
+            "BINARY".cyan().bold(),
+            op.to_string().yellow(),
+            self.visit_expr(lhs),
+            self.visit_expr(rhs),
+            Self::INDENT.repeat(self.indent),
+            Self::INDENT.repeat(self.indent - 1)
+        );
+
+        self.indent -= 1;
+        expr_str
+    }
+
+    fn visit_literal(&mut self, literal: &WithToken<Literal>) -> String {
+        match &literal.0 {
+            Literal::Float(f) => format!("{}({})", "FLOAT".green(), f.to_string().magenta()),
+            Literal::Integer(i) => format!("{}({})", "INT".green(), i.to_string().magenta()),
+        }
+    }
+
+    fn visit_unary(&mut self, expr: &Unary) -> String {
+        let Unary { op, expr } = expr;
+        self.indent += 1;
+        let expr_str = format!(
+            "{0}(\"{1}\",\n{3}{2}\n{4})",
+            "UNARY".cyan().bold(),
+            op.to_string().yellow(),
+            self.visit_expr(expr),
+            Self::INDENT.repeat(self.indent),
+            Self::INDENT.repeat(self.indent - 1)
+        );
+        self.indent -= 1;
+        expr_str
+    }
+
+    fn visit_var(&mut self, name: &WithToken<String>) -> String {
+        name.green().to_string()
+    }
+}
+
+impl StmtRefVisitor<String> for PrettyPrint {
+    fn visit_expression(&mut self, expr: &Expr) -> String {
+        self.indent += 1;
+        let expr_str = format!(
+            "{0}{1}\x0b{2}",
+            Self::INDENT.repeat(self.indent - 1),
+            "EXPR".red(),
+            self.visit_expr(expr)
+        );
+        self.indent -= 1;
+        expr_str
+    }
+
+    fn visit_null(&mut self) -> String {
+        format!("{}{}", Self::INDENT.repeat(self.indent), "NULL".red())
+    }
+
+    fn visit_return(&mut self, ret_value: &Expr) -> String {
+        self.indent += 1;
+        let ret_str = format!(
+            "{}{} \x0b{}",
+            Self::INDENT.repeat(self.indent - 1),
+            "RETURN".red(),
+            self.visit_expr(ret_value)
+        );
+        self.indent -= 1;
+        ret_str
+    }
+}
+
+impl ASTRefVisitor for PrettyPrint {
+    type BlockItemResult = String;
+    type ExprResult = String;
+    type FuncDefResult = String;
+    type ProgramResult = String;
+    type StmtResult = String;
+    type VarDeclResult = String;
+
     fn visit_program(&mut self, program: &Program) -> String {
         program
             .0
@@ -38,95 +133,39 @@ impl ASTVisitor<String> for PrettyPrint {
             .join("\n\n")
     }
 
+    fn visit_block_item(&mut self, block_item: &BlockItem) -> Self::BlockItemResult {
+        match block_item {
+            BlockItem::Stmt(stmt) => self.visit_stmt(stmt),
+            BlockItem::VarDecl(decl) => self.visit_var_decl(decl),
+        }
+    }
+
     fn visit_function_def(&mut self, function_def: &FunctionDef) -> String {
         self.indent += 1;
         let body_str = function_def
             .body
             .iter()
-            .map(|stmt| self.visit_stmt(stmt))
+            .map(|item| self.visit_block_item(item))
             .collect::<Vec<_>>()
             .join("\n");
         self.indent -= 1;
         format!("{}():\n{}", function_def.name.blue(), body_str)
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt) -> String {
+    fn visit_var_decl(&mut self, var_decl: &VarDecl) -> String {
         self.indent += 1;
-        let stmt_str = match stmt {
-            Stmt::Return { ret_value } => {
-                format!("{}\n{}", "RETURN".red(), self.visit_expr(ret_value))
+        let decl_str = format!(
+            "{}{} {} {}",
+            Self::INDENT.repeat(self.indent - 1),
+            "VAR".red(),
+            var_decl.name.green().bold(),
+            if let Some(expr) = &var_decl.init {
+                format!(" = {}", self.visit_expr(expr))
+            } else {
+                String::new()
             }
-        };
+        );
         self.indent -= 1;
-        format!("{}{}", Self::INDENT.repeat(self.indent), stmt_str)
-    }
-
-    fn visit_expr(&mut self, expr: &Expr) -> String {
-        self.indent += 1;
-        let expr_str = match expr {
-            Expr::Literal(lit) => format!("{}", self.visit_literal(lit)),
-            Expr::Unary { op, expr } => format!(
-                "{}(\"{}\",\n{}\n{})",
-                "UNARY".cyan().bold(),
-                self.visit_unary_op(op),
-                self.visit_expr(expr),
-                Self::INDENT.repeat(self.indent - 1)
-            ),
-            Expr::Binary { op, lhs, rhs } => format!(
-                "{}(\"{}\",\n{},\n{}\n{})",
-                "BINARY".cyan().bold(),
-                self.visit_binary_op(op),
-                self.visit_expr(lhs),
-                self.visit_expr(rhs),
-                Self::INDENT.repeat(self.indent - 1)
-            ),
-        };
-        self.indent -= 1;
-        format!("{}{}", Self::INDENT.repeat(self.indent), expr_str)
-    }
-
-    fn visit_unary_op(&mut self, unary_op: &UnaryOp) -> String {
-        match unary_op {
-            UnaryOp::BitNOT => "~",
-            UnaryOp::Minus => "-",
-            UnaryOp::Not => "!",
-        }
-        .yellow()
-        .to_string()
-    }
-
-    fn visit_binary_op(&mut self, binary_op: &BinaryOp) -> String {
-        match binary_op {
-            BinaryOp::Div => "/",
-            BinaryOp::Minus => "-",
-            BinaryOp::Mul => "*",
-            BinaryOp::Plus => "+",
-            BinaryOp::Mod => "%",
-
-            BinaryOp::BitwiseAND => "&",
-            BinaryOp::BitwiseOR => "|",
-            BinaryOp::LShift => "<<",
-            BinaryOp::RShift => ">>",
-            BinaryOp::BitwiseXOR => "^",
-
-            BinaryOp::Eq => "==",
-            BinaryOp::NotEq => "!=",
-            BinaryOp::Greater => ">",
-            BinaryOp::GreaterEq => ">=",
-            BinaryOp::Lesser => "<",
-            BinaryOp::LesserEq => "<=",
-
-            BinaryOp::And => "&&",
-            BinaryOp::Or => "||",
-        }
-        .yellow()
-        .to_string()
-    }
-
-    fn visit_literal(&mut self, literal: &Literal) -> String {
-        match literal {
-            Literal::Float(f) => format!("{}({})", "FLOAT".green(), f.to_string().magenta()),
-            Literal::Integer(i) => format!("{}({})", "INT".green(), i.to_string().magenta()),
-        }
+        decl_str
     }
 }

@@ -1,5 +1,7 @@
 pub mod ast;
+mod expr;
 pub mod pretty_print_ast;
+mod stmt;
 
 use crate::lexer::token::{self, Span, Token, TokenType};
 use ast::*;
@@ -7,14 +9,16 @@ use multipeek::{multipeek, MultiPeek};
 use thiserror::Error;
 
 // <program>        ::= <function-decl>
-// <function-decl>  ::= "int" <identifier> "(" "void" ")" "{" <function-body> "}"
-// <function-body>  ::= (<statement> ";")*
-// <statement>      ::= "return" <expr>
-// <expr>           ::= <term>
+// <function-decl>  ::= "int" <identifier> "(" "void" ")" "{" <block-tem>* "}"
+// <block-item>     ::= <statment> | <declaration>
+// <declaration>    ::= "int" <identifier> ( "=" <expr> )? ";"
+// <statement>      ::= "return" <expr> ";" | <expr> ";" | ";"
+// <expr>           ::= <assign>
+// <assign>         ::= <term> "=" <term>
 // <term>           ::= <factor> ( ( "+" | "-" ) <factor> )?
 // <factor>         ::= <unary> ( ( "*" | "/" | "%" ) <unary> )?
 // <unary>          ::= <unary-op>? <primary>
-// <primary>        ::= <constant> | "(" <expr> ")"
+// <primary>        ::= <constant> | "(" <expr> ")" | <identifier>
 // <unary-op>       ::= "-" | "~"
 // <constant>       ::= <integer>
 
@@ -22,13 +26,14 @@ macro_rules! parse_binary_expr {
     ( $self: ident, $ops: pat, $nextp: ident ) => {{
         let mut lhs = $self.$nextp()?;
         while let Some($ops) = $self.peek_token_type() {
-            let op = binary_tt_to_op(&$self.advance().unwrap().tok_type);
+            let op_token = $self.advance().unwrap();
+            let op = binary_tt_to_op(&op_token.tok_type);
             let rhs = Box::new($self.$nextp()?);
-            lhs = Expr::Binary {
-                op,
+            lhs = Expr::Binary(Binary {
+                op: WithToken(op, op_token),
                 lhs: Box::new(lhs),
                 rhs,
-            }
+            })
         }
         Ok(lhs)
     }};
@@ -122,12 +127,14 @@ impl<'a> Parser<'a> {
             }) => {
                 if tok_type == *tt {
                     Ok(self.advance().unwrap())
-                } else if tok_type == TokenType::EOF {
-                    Err(self.error_at_current(ParseErrorType::Expected {
-                        exp,
-                        got: String::from("<eof>"),
-                    }))
-                } else {
+                }
+                // else if tok_type == TokenType::EOF {
+                //     Err(self.error_at_current(ParseErrorType::Expected {
+                //         exp,
+                //         got: String::from("<eof>"),
+                //     }))
+                // }
+                else {
                     let span = *span;
                     let lexeme = self.input[span.0..span.1].to_string();
                     Err(self.error_at_current(ParseErrorType::Expected { exp, got: lexeme }))
@@ -136,6 +143,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn consume_identifier(&mut self) -> ParseResult<WithToken<String>> {
+        let exp = "<identifier>";
+        match self.peek() {
+            Some(Token {
+                tok_type: TokenType::EOF,
+                ..
+            })
+            | None => Err(self.error_at_current(ParseErrorType::Expected {
+                exp,
+                got: String::from("<eof>"),
+            })),
+            Some(Token {
+                tok_type: TokenType::Identifier(ident),
+                ..
+            }) => Ok(WithToken(ident.clone(), self.advance().unwrap())),
+            Some(Token { span, .. }) => {
+                let span = *span;
+                let lexeme = self.input[span.0..span.1].to_string();
+                Err(self.error_at_current(ParseErrorType::Expected { exp, got: lexeme }))
+            }
+        }
+    }
+
+    #[allow(unused)]
     fn consume_if<F>(&mut self, pred: F, exp: &'static str) -> ParseResult<Token>
     where
         F: FnOnce(&TokenType) -> bool,
@@ -191,32 +222,54 @@ impl<'a> Parser<'a> {
     fn function_def(&mut self) -> ParseResult<FunctionDef> {
         self.consume(TokenType::Identifier(String::from("int")), "int")?;
 
-        let name = self.consume(TokenType::Identifier(String::from("main")), "main")?;
-        let name = match name.tok_type {
-            TokenType::Identifier(ident) => ident,
-            _ => unreachable!(),
-        };
+        let name = self.consume_identifier()?;
 
         self.consume(TokenType::LParen, "(")?;
         self.consume(TokenType::Identifier(String::from("void")), "void")?;
         self.consume(TokenType::RParen, ")")?;
 
         self.consume(TokenType::LBrace, "{")?;
-        self.consume(TokenType::KReturn, "return")?;
 
-        let ret_value = self.expression()?;
+        let mut body = Vec::new();
+        loop {
+            match self.peek_token_type() {
+                Some(TokenType::RBrace) => break,
+                _ => body.push(self.block_item()?),
+            };
+        }
 
-        self.consume(TokenType::Semicolon, ";")?;
         self.consume(TokenType::RBrace, "}")?;
 
-        Ok(FunctionDef {
-            name,
-            body: vec![Stmt::Return { ret_value }],
-        })
+        Ok(FunctionDef { name, body })
     }
 
+    fn block_item(&mut self) -> ParseResult<BlockItem> {
+        match self.peek_token_type() {
+            Some(TokenType::Identifier(name)) if name == "int" => self.declaration(),
+            _ => Ok(BlockItem::Stmt(self.statement()?)),
+        }
+    }
+}
+
+impl<'a> Parser<'a> {
+    // Methods for parsing expressions
+
     fn expression(&mut self) -> ParseResult<Expr> {
-        self.or()
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> ParseResult<Expr> {
+        let mut lhs = self.or()?;
+        if let Some(TokenType::Equal) = self.peek_token_type() {
+            let eq_sign = self.advance().unwrap();
+            let rhs = Box::new(self.assignment()?);
+            lhs = Expr::Assign(Assign {
+                eq_sign,
+                lhs: Box::new(lhs),
+                rhs,
+            });
+        }
+        Ok(lhs)
     }
 
     fn or(&mut self) -> ParseResult<Expr> {
@@ -295,13 +348,13 @@ impl<'a> Parser<'a> {
         let tt = self.peek_token_type();
         match tt {
             Some(TokenType::Minus | TokenType::Tilde) => {
-                let op = unary_tt_to_op(tt.unwrap());
-                self.advance();
+                let op_token = self.advance().unwrap();
+                let op = unary_tt_to_op(&op_token.tok_type);
                 let expr = self.unary()?;
-                Ok(Expr::Unary {
-                    op,
+                Ok(Expr::Unary(Unary {
+                    op: WithToken(op, op_token),
                     expr: Box::new(expr),
-                })
+                }))
             }
             _ => self.primary(),
         }
@@ -312,20 +365,25 @@ impl<'a> Parser<'a> {
         match tt {
             Some(TokenType::Literal(_)) => {
                 let token = self.advance().unwrap();
-                let value = match token.tok_type {
+                let value = match &token.tok_type {
                     TokenType::Literal(lit) => match lit {
-                        token::Literal::Integer(value) => Literal::Integer(value),
-                        _ => unreachable!(),
+                        token::Literal::Integer(value) => Literal::Integer(*value),
+                        _ => todo!(),
                     },
-                    _ => unreachable!(),
+                    _ => todo!(),
                 };
-                Ok(Expr::Literal(value))
+                Ok(Expr::Literal(WithToken(value, token)))
             }
             Some(TokenType::LParen) => {
                 self.advance();
                 let expr = self.expression()?;
                 self.consume(TokenType::RParen, ")")?;
                 Ok(expr)
+            }
+            Some(TokenType::Identifier(name)) => {
+                let name = name.clone();
+                let token = self.advance().unwrap();
+                Ok(Expr::Var(WithToken(name, token)))
             }
             _ => {
                 let span = self.peek().unwrap().span;
@@ -335,6 +393,49 @@ impl<'a> Parser<'a> {
                 }))
             }
         }
+    }
+}
+
+impl<'a> Parser<'a> {
+    fn declaration(&mut self) -> ParseResult<BlockItem> {
+        self.advance();
+
+        let name = self.consume_identifier()?;
+
+        let init = if let Some(TokenType::Equal) = self.peek_token_type() {
+            self.advance();
+            let rhs = self.expression()?;
+            Some(rhs)
+        } else {
+            None
+        };
+        self.consume(TokenType::Semicolon, ";")?;
+
+        Ok(BlockItem::VarDecl(VarDecl { name, init }))
+    }
+
+    fn statement(&mut self) -> ParseResult<Stmt> {
+        match self.peek_token_type() {
+            Some(TokenType::KReturn) => self.return_statement(),
+            Some(TokenType::Semicolon) => {
+                self.advance();
+                Ok(Stmt::Null)
+            }
+            _ => self.expression_statement(),
+        }
+    }
+
+    fn return_statement(&mut self) -> ParseResult<Stmt> {
+        self.advance();
+        let ret_value = self.expression()?;
+        self.consume(TokenType::Semicolon, ";")?;
+        Ok(Stmt::Return { ret_value })
+    }
+
+    fn expression_statement(&mut self) -> ParseResult<Stmt> {
+        let expr = self.expression()?;
+        self.consume(TokenType::Semicolon, ";")?;
+        Ok(Stmt::Expression(expr))
     }
 }
 

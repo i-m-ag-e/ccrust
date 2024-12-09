@@ -9,9 +9,11 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Comma,
+    Colon,
     Dot,
     LBrace,
     LParen,
+    QMark,
     RBrace,
     RParen,
     Semicolon,

@@ -1,10 +1,12 @@
+use colored::Colorize;
 // use rustcc::asmgen::AsmGen;
-use rustcc::asm::{self, Program};
+use rustcc::asm::Program;
 use rustcc::lexer::token::{Token, TokenType};
 use rustcc::lexer::Lexer;
-use rustcc::parser::ast::ASTVisitor;
+use rustcc::parser::ast::{ASTRefVisitor, ASTVisitor};
 use rustcc::parser::pretty_print_ast::PrettyPrint;
 use rustcc::parser::Parser;
+use rustcc::resolver::Resolver;
 use rustcc::tacky::GenerateTacky;
 use std::env;
 use std::fs;
@@ -59,10 +61,36 @@ fn main() -> std::io::Result<()> {
     let program = parser.program();
 
     match program {
-        Ok(program) => {
-            println!("AST:\n{}\n", PrettyPrint::new().visit_program(&program));
+        Ok(mut program) => {
+            println!("{:#?}\n\n", program);
+            println!("AST:\n{}\n", PrettyPrint::new().visit_program(&mut program));
 
-            let tacky = GenerateTacky::new().generate(&program);
+            let mut resolver = Resolver::new();
+            let res = resolver.visit_program(program);
+
+            match res {
+                Err(err) => {
+                    println!("{:?}", err);
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "Error {}:{} (at ({:?}):: {}",
+                            err.token.line,
+                            err.token.span.0,
+                            &text[err.token.span.0..err.token.span.1],
+                            err.error_type
+                        )
+                        .red()
+                    );
+                    std::process::exit(-1);
+                }
+                Ok(prog) => {
+                    program = prog;
+                    println!("AST:\n{}\n", PrettyPrint::new().visit_program(&program));
+                }
+            }
+
+            let tacky = GenerateTacky::new().visit_program(&program);
             let asm = Program::from(&tacky);
             let asm_string = asm.to_asm_string();
 
@@ -96,11 +124,15 @@ fn main() -> std::io::Result<()> {
         Err(err) => {
             println!("{:?}", err);
             eprintln!(
-                "Error {}:{} (at ({:?}):: {}",
-                err.token.line,
-                err.token.span.0,
-                &text[err.token.span.0..err.token.span.1],
-                err.error
+                "{}",
+                format!(
+                    "Error {}:{} (at ({:?}):: {}",
+                    err.token.line,
+                    err.token.span.0,
+                    &text[err.token.span.0..err.token.span.1],
+                    err.error
+                )
+                .red()
             );
         }
     }
