@@ -4,7 +4,7 @@ use crate::lexer::token::Token;
 
 use super::ast::WithToken;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Assign(Assign),
     Binary(Binary),
@@ -14,27 +14,27 @@ pub enum Expr {
     Var(WithToken<String>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Assign {
     pub eq_sign: Token,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Binary {
     pub op: WithToken<BinaryOp>,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Unary {
     pub op: WithToken<UnaryOp>,
     pub expr: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Conditional {
     pub cond: Box<Expr>,
     pub then_expr: Box<Expr>,
