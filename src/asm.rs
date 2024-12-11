@@ -308,8 +308,8 @@ impl From<&BinaryOp> for CondCode {
 pub enum Instruction {
     AllocateStack(i32),
     Binary(BinaryOp, Operand, Operand),
-    Cdq,
     Cmp(Operand, Operand),
+    Cqo,
     Idiv(Operand),
     Jmp(String),
     JmpCC(CondCode, String),
@@ -332,7 +332,7 @@ impl Instruction {
             }
             Instruction::Binary(op, val, src) => {
                 format!(
-                    "{}\t{}, {}",
+                    "{:<4}\t{}, {}",
                     binary_op_to_asm(op),
                     val.to_asm_string(),
                     src.to_asm_string()
@@ -343,9 +343,9 @@ impl Instruction {
             }
             Instruction::Label(label) => format!("{}:", label),
             Instruction::Jmp(target) => format!("jmp\t\t{}", target),
-            Instruction::JmpCC(op, target) => format!("jmp{}\t{}", op, target),
+            Instruction::JmpCC(op, target) => format!("j{}\t{}", op, target),
             Instruction::SetCC(op, dest) => format!("set{}\t{}", op, dest.to_asm_string()),
-            Instruction::Cdq => "cdq".to_string(),
+            Instruction::Cqo => "cqo".to_string(),
             Instruction::Idiv(operand) => format!("idivq\t{}", operand.to_asm_string()),
             Instruction::Ret => indent(&["movq\t%rbp, %rsp", "popq\t%rbp", "ret"]),
         }
@@ -394,7 +394,7 @@ impl Instruction {
             }
             tacky::Instruction::Binary(op, vlhs, vrhs, dest) => {
                 let vlhs = Operand::from(vlhs);
-                let vrhs = Operand::from(vrhs);
+                let mut vrhs = Operand::from(vrhs);
                 let dest = Operand::from(dest);
                 match op {
                     BinaryOp::Mod | BinaryOp::Div => {
@@ -408,7 +408,18 @@ impl Instruction {
                                 src: vlhs,
                                 dest: Operand::Reg(Register::RAX),
                             },
-                            Instruction::Cdq,
+                            Instruction::Cqo,
+                        ]);
+
+                        if let Operand::Imm(_) = vrhs {
+                            body.push(Instruction::Mov {
+                                src: vrhs,
+                                dest: Operand::Reg(Register::R10),
+                            });
+                            vrhs = Operand::Reg(Register::R10);
+                        }
+
+                        body.extend_from_slice(&[
                             Instruction::Idiv(vrhs),
                             Instruction::Mov {
                                 src: result_reg,
@@ -423,7 +434,7 @@ impl Instruction {
                     | BinaryOp::Greater
                     | BinaryOp::GreaterEq => {
                         body.extend_from_slice(&[
-                            Instruction::Cmp(vlhs, vrhs),
+                            Instruction::Cmp(vrhs, vlhs),
                             Instruction::Mov {
                                 src: Operand::Imm(0),
                                 dest: dest.clone(),

@@ -17,7 +17,7 @@ macro_rules! hash_map {
 }
 
 macro_rules! multi_char_tok {
-    ( $self: ident, $orig: expr; $( $c: literal => $tt: expr ),+ $(,)? ) => {
+    ( $self: ident, $orig: expr; $( $c: literal => $tt: expr $( =>= $c1: literal => $tt1: expr )? ),+ $(,)? ) => {
         // if $self.advance_if_eq($c) {
         //     Ok($self.make_token($yes))
         // } else {
@@ -26,6 +26,16 @@ macro_rules! multi_char_tok {
         match $self.peek() {
             $(
                 Some($c) => {
+                    $(
+                        match $self.peek_next() {
+                            Some($c1) => {
+                                $self.advance();
+                                $self.advance();
+                                return Ok($self.make_token($tt1));
+                            },
+                            _ => {}
+                        };
+                    )?
                     $self.advance();
                     Ok($self.make_token($tt))
                 }
@@ -326,21 +336,29 @@ impl<'a> Lexer<'a> {
             ';' => Ok(self.make_token(TokenType::Semicolon)),
 
             '!' => multi_char_tok!(self, TokenType::Bang; '=' => TokenType::BangEq),
-            '&' => multi_char_tok!(self, TokenType::BitwiseAND; '&' => TokenType::And),
-            '|' => multi_char_tok!(self, TokenType::BitwiseOR; '|' => TokenType::Or),
-            '^' => Ok(self.make_token(TokenType::BitwiseXOR)),
-            '-' => multi_char_tok!(self, TokenType::Minus; '-' => TokenType::Decrement),
+            '&' => multi_char_tok!(self, TokenType::BitwiseAND;
+                                         '&' => TokenType::And,
+                                         '=' => TokenType::BitwiseANDEq),
+            '|' => multi_char_tok!(self, TokenType::BitwiseOR;
+                                         '|' => TokenType::Or,
+                                         '=' => TokenType::BitwiseOREq),
+            '^' => multi_char_tok!(self, TokenType::BitwiseXOR; '=' => TokenType::BitwiseXOREq),
+            '-' => multi_char_tok!(self, TokenType::Minus;
+                                         '-' => TokenType::Decrement,
+                                         '=' => TokenType::MinusEq),
             '=' => multi_char_tok!(self, TokenType::Equal; '=' => TokenType::EqEqual),
             '>' => multi_char_tok!(self, TokenType::Greater;
                                          '=' => TokenType::GreaterEq,
-                                         '>' => TokenType::RShift),
+                                         '>' => TokenType::RShift =>= '=' => TokenType::RShiftEq),
             '<' => multi_char_tok!(self, TokenType::Lesser;
                                          '=' => TokenType::LesserEq,
-                                         '<' => TokenType::LShift),
-            '+' => multi_char_tok!(self, TokenType::Plus; '+' => TokenType::Increment),
-            '%' => Ok(self.make_token(TokenType::Perc)),
-            '*' => Ok(self.make_token(TokenType::Star)),
-            '/' => Ok(self.make_token(TokenType::Slash)),
+                                         '<' => TokenType::LShift =>= '=' => TokenType::LShiftEq),
+            '+' => multi_char_tok!(self, TokenType::Plus;
+                                         '+' => TokenType::Increment,
+                                         '=' => TokenType::PlusEq),
+            '%' => multi_char_tok!(self, TokenType::Perc; '=' => TokenType::PercEq),
+            '*' => multi_char_tok!(self, TokenType::Star; '=' => TokenType::StarEq),
+            '/' => multi_char_tok!(self, TokenType::Slash; '=' => TokenType::SlashEq),
             '~' => Ok(self.make_token(TokenType::Tilde)),
 
             '\'' => {

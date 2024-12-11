@@ -100,20 +100,25 @@ fn main() -> std::io::Result<()> {
 
             fs::write(&asm_file_path, &asm_string)?;
 
-            let assemble_success = Command::new("gcc")
+            let mut command = Command::new("gcc");
+            command
                 .arg(
-                    path.to_str()
+                    asm_file_path
+                        .to_str()
                         .expect("path is not valid Unicode")
                         .to_string(),
                 )
-                .args(["-o", asm_file_path.with_extension("").to_str().unwrap()])
+                .args(["-o", asm_file_path.with_extension("").to_str().unwrap()]);
+            println!("Assemblig with command: {:?}", command);
+            let assemble_success = command
                 .spawn()
                 .expect("could not begin compilation using gcc")
                 .wait()
-                .expect("could not compile using gcc")
-                .success();
+                .expect("could not compile using gcc");
 
-            if assemble_success {
+            println!("exit status: {}", assemble_success);
+
+            if assemble_success.success() {
                 println!("Compiled successfully");
                 // fs::remove_file(asm_file_path)?;
             } else {

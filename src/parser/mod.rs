@@ -248,13 +248,48 @@ impl<'a> Parser<'a> {
 
     fn assignment(&mut self) -> ParseResult<Expr> {
         let mut lhs = self.conditional_expr()?;
-        if let Some(TokenType::Equal) = self.peek_token_type() {
+        if let Some(
+            TokenType::Equal
+            | TokenType::BitwiseANDEq
+            | TokenType::BitwiseOREq
+            | TokenType::BitwiseXOREq
+            | TokenType::LShiftEq
+            | TokenType::MinusEq
+            | TokenType::PercEq
+            | TokenType::PlusEq
+            | TokenType::RShiftEq
+            | TokenType::SlashEq
+            | TokenType::StarEq,
+        ) = self.peek_token_type()
+        {
             let eq_sign = self.advance().unwrap();
-            let rhs = Box::new(self.assignment()?);
+            let mut rhs = self.assignment()?;
+
+            if eq_sign.tok_type != TokenType::Equal {
+                let op = match eq_sign.tok_type {
+                    TokenType::BitwiseANDEq => TokenType::BitwiseAND,
+                    TokenType::BitwiseOREq => TokenType::BitwiseOR,
+                    TokenType::BitwiseXOREq => TokenType::BitwiseXOR,
+                    TokenType::LShiftEq => TokenType::LShift,
+                    TokenType::MinusEq => TokenType::Minus,
+                    TokenType::PercEq => TokenType::Perc,
+                    TokenType::PlusEq => TokenType::Plus,
+                    TokenType::RShiftEq => TokenType::RShift,
+                    TokenType::SlashEq => TokenType::Slash,
+                    TokenType::StarEq => TokenType::Star,
+                    _ => unreachable!(),
+                };
+                rhs = Expr::Binary(Binary {
+                    op: WithToken(binary_tt_to_op(&op), eq_sign.clone()),
+                    lhs: Box::new(lhs.clone()),
+                    rhs: Box::new(rhs),
+                });
+            }
+
             lhs = Expr::Assign(Assign {
                 eq_sign,
                 lhs: Box::new(lhs),
-                rhs,
+                rhs: Box::new(rhs),
             });
         }
         Ok(lhs)
