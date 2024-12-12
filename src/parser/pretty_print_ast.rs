@@ -99,15 +99,20 @@ impl ExprRefVisitor<String> for PrettyPrint {
     }
 
     fn visit_unary(&mut self, expr: &Unary) -> String {
-        let Unary { op, expr } = expr;
+        let Unary { op, expr, postfix } = expr;
         self.indent += 1;
         let expr_str = format!(
-            "{0}(\"{1}\",\n{3}{2}\n{4})",
+            "{0}(\"{1}\"{5},\n{3}{2}\n{4})",
             "UNARY".cyan().bold(),
             op.to_string().yellow(),
             self.visit_expr(expr),
             Self::INDENT.repeat(self.indent),
-            Self::INDENT.repeat(self.indent - 1)
+            Self::INDENT.repeat(self.indent - 1),
+            if *postfix {
+                format!(", ({})", "POST".green())
+            } else {
+                "".to_string()
+            }
         );
         self.indent -= 1;
         expr_str
@@ -129,6 +134,15 @@ impl StmtRefVisitor<String> for PrettyPrint {
         );
         self.indent -= 1;
         expr_str
+    }
+
+    fn visit_goto(&mut self, label: &WithToken<String>) -> String {
+        format!(
+            "{}{} {}",
+            Self::INDENT.repeat(self.indent),
+            "GOTO".red(),
+            label.yellow().bold()
+        )
     }
 
     fn visit_if(&mut self, if_stmt: &IfStmt) -> String {
@@ -153,6 +167,19 @@ impl StmtRefVisitor<String> for PrettyPrint {
         );
         self.indent -= 1;
         cond_str
+    }
+
+    fn visit_label(&mut self, label: &Label) -> String {
+        self.indent += 1;
+        let label_str = format!(
+            "{}{} {}:\n{}",
+            Self::INDENT.repeat(self.indent - 1),
+            "LABEL".red(),
+            label.name.yellow().bold(),
+            self.visit_stmt(&*label.next_stmt)
+        );
+        self.indent -= 1;
+        label_str
     }
 
     fn visit_null(&mut self) -> String {

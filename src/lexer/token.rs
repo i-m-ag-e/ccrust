@@ -54,6 +54,7 @@ pub enum TokenType {
 
     KElse,
     KFor,
+    KGoto,
     KIf,
     KReturn,
     KWhile,
@@ -65,10 +66,10 @@ pub enum TokenType {
     EOF,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Span(pub usize, pub usize);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub span: Span,
     pub line: usize,

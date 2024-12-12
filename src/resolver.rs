@@ -81,6 +81,7 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
         Ok(Expr::Unary(Unary {
             op: expr.op,
             expr: Box::new(self.visit_expr(*expr.expr)?),
+            postfix: expr.postfix,
         }))
     }
 
@@ -101,6 +102,10 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
         Ok(Stmt::Expression(self.visit_expr(expr)?))
     }
 
+    fn visit_goto(&mut self, label: WithToken<String>) -> ResolveResult<Stmt> {
+        Ok(Stmt::Goto(label))
+    }
+
     fn visit_if(&mut self, if_stmt: IfStmt) -> ResolveResult<Stmt> {
         Ok(Stmt::If(IfStmt {
             cond: self.visit_expr(if_stmt.cond)?,
@@ -110,6 +115,13 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
                 .map(|ec| self.visit_stmt(*ec))
                 .transpose()?
                 .map(Box::new),
+        }))
+    }
+
+    fn visit_label(&mut self, label: Label) -> ResolveResult<Stmt> {
+        Ok(Stmt::Label(Label {
+            name: label.name,
+            next_stmt: Box::new(self.visit_stmt(*label.next_stmt)?),
         }))
     }
 

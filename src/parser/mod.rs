@@ -49,6 +49,9 @@ pub struct ParseError {
 pub enum ParseErrorType {
     #[error("expected `{exp}`, got {got:?}")]
     Expected { exp: &'static str, got: String },
+
+    #[error("redifinition of label `{0}` (previous definition at {1:?}")]
+    RedefinedLabel(String, Token),
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -56,7 +59,7 @@ pub type ParseResult<T> = Result<T, ParseError>;
 pub struct Parser<'a> {
     input: &'a str,
     tokens: MultiPeek<<Vec<Token> as IntoIterator>::IntoIter>,
-    // errors: Vec<ParseError>,
+    current_function_labels: Vec<WithToken<String>>,
 }
 
 impl<'a> Parser<'a> {
@@ -65,6 +68,7 @@ impl<'a> Parser<'a> {
         Self {
             input,
             tokens: multipeek(tokens.into_iter()),
+            current_function_labels: Vec::new(),
             // errors: Vec::new(),
         }
     }
@@ -80,9 +84,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // fn peek_next(&mut self) -> Option<&Token> {
-    //     self.tokens.peek_nth(1)
-    // }
+    fn peek_next(&mut self) -> Option<&Token> {
+        self.tokens.peek_nth(1)
+    }
 
     fn advance(&mut self) -> Option<Token> {
         self.tokens.next()
@@ -227,6 +231,7 @@ impl<'a> Parser<'a> {
         }
 
         self.consume(TokenType::RBrace, "}")?;
+        self.current_function_labels.clear();
 
         Ok(FunctionDef { name, body })
     }
@@ -364,17 +369,34 @@ impl<'a> Parser<'a> {
     fn unary(&mut self) -> ParseResult<Expr> {
         let tt = self.peek_token_type();
         match tt {
-            Some(TokenType::Minus | TokenType::Tilde) => {
+            Some(
+                TokenType::Minus | TokenType::Tilde | TokenType::Increment | TokenType::Decrement,
+            ) => {
                 let op_token = self.advance().unwrap();
                 let op = unary_tt_to_op(&op_token.tok_type);
                 let expr = self.unary()?;
                 Ok(Expr::Unary(Unary {
                     op: WithToken(op, op_token),
                     expr: Box::new(expr),
+                    postfix: false,
                 }))
             }
-            _ => self.primary(),
+            _ => self.postfix(),
         }
+    }
+
+    fn postfix(&mut self) -> ParseResult<Expr> {
+        let mut lhs = self.primary()?;
+        while let Some(TokenType::Increment | TokenType::Decrement) = self.peek_token_type() {
+            let op_token = self.advance().unwrap();
+            let op = unary_tt_to_op(&op_token.tok_type);
+            lhs = Expr::Unary(Unary {
+                op: WithToken(op, op_token),
+                expr: Box::new(lhs),
+                postfix: true,
+            });
+        }
+        Ok(lhs)
     }
 
     fn primary(&mut self) -> ParseResult<Expr> {
@@ -433,14 +455,33 @@ impl<'a> Parser<'a> {
 
     fn statement(&mut self) -> ParseResult<Stmt> {
         match self.peek_token_type() {
+            Some(TokenType::KGoto) => self.goto_stmt(),
             Some(TokenType::KIf) => self.if_stmt(),
             Some(TokenType::KReturn) => self.return_statement(),
             Some(TokenType::Semicolon) => {
                 self.advance();
                 Ok(Stmt::Null)
             }
+            Some(TokenType::Identifier(_)) => {
+                if let Some(Token {
+                    tok_type: TokenType::Colon,
+                    ..
+                }) = self.peek_next()
+                {
+                    self.label()
+                } else {
+                    self.expression_statement()
+                }
+            }
             _ => self.expression_statement(),
         }
+    }
+
+    fn goto_stmt(&mut self) -> ParseResult<Stmt> {
+        self.advance();
+        let label = self.consume_identifier()?;
+        self.consume(TokenType::Semicolon, ";")?;
+        Ok(Stmt::Goto(label))
     }
 
     fn if_stmt(&mut self) -> ParseResult<Stmt> {
@@ -472,6 +513,23 @@ impl<'a> Parser<'a> {
         Ok(Stmt::Return { ret_value })
     }
 
+    fn label(&mut self) -> ParseResult<Stmt> {
+        let name = self.consume_identifier()?;
+
+        if let Some(prev_token) = self.current_function_labels.iter().find(|l| ***l == *name) {
+            return Err(ParseError {
+                token: name.1,
+                error: ParseErrorType::RedefinedLabel(name.0, prev_token.1.clone()),
+            });
+        } else {
+            self.current_function_labels.push(name.clone());
+        }
+
+        self.advance(); // consume the colon
+        let next_stmt = Box::new(self.statement()?);
+        Ok(Stmt::Label(Label { name, next_stmt }))
+    }
+
     fn expression_statement(&mut self) -> ParseResult<Stmt> {
         let expr = self.expression()?;
         self.consume(TokenType::Semicolon, ";")?;
@@ -483,6 +541,8 @@ fn unary_tt_to_op(tt: &TokenType) -> UnaryOp {
     match tt {
         TokenType::Minus => UnaryOp::Minus,
         TokenType::Tilde => UnaryOp::BitNOT,
+        TokenType::Increment => UnaryOp::Increment,
+        TokenType::Decrement => UnaryOp::Decrement,
         _ => unreachable!(),
     }
 }

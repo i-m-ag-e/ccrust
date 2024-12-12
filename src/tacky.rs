@@ -1,5 +1,5 @@
 use crate::parser::ast::{
-    self, ASTRefVisitor, BinaryOp, BlockItem, ExprRefVisitor, Literal, StmtRefVisitor,
+    self, ASTRefVisitor, BinaryOp, BlockItem, ExprRefVisitor, Literal, StmtRefVisitor, WithToken,
 };
 
 #[derive(Debug)]
@@ -171,11 +171,65 @@ impl ExprRefVisitor<Value> for GenerateTacky {
     }
 
     fn visit_unary(&mut self, expr: &ast::Unary) -> Value {
-        let ast::Unary { op, expr } = expr;
+        let ast::Unary { op, expr, postfix } = expr;
         let expr_value = self.visit_expr(expr);
         let var = self.new_var();
-        self.current_body
-            .push(Instruction::Unary(**op, expr_value, var.clone()));
+
+        match **op {
+            ast::UnaryOp::Increment => {
+                if *postfix {
+                    self.current_body.push(Instruction::Copy {
+                        src: expr_value.clone(),
+                        dst: var.clone(),
+                    });
+                    self.current_body.push(Instruction::Binary(
+                        BinaryOp::Plus,
+                        expr_value.clone(),
+                        Value::Literal(Literal::Integer(1)),
+                        expr_value,
+                    ));
+                } else {
+                    self.current_body.push(Instruction::Binary(
+                        BinaryOp::Plus,
+                        expr_value.clone(),
+                        Value::Literal(Literal::Integer(1)),
+                        expr_value.clone(),
+                    ));
+                    self.current_body.push(Instruction::Copy {
+                        src: expr_value,
+                        dst: var.clone(),
+                    });
+                }
+            }
+            ast::UnaryOp::Decrement => {
+                if *postfix {
+                    self.current_body.push(Instruction::Copy {
+                        src: expr_value.clone(),
+                        dst: var.clone(),
+                    });
+                    self.current_body.push(Instruction::Binary(
+                        BinaryOp::Minus,
+                        expr_value.clone(),
+                        Value::Literal(Literal::Integer(1)),
+                        expr_value,
+                    ));
+                } else {
+                    self.current_body.push(Instruction::Binary(
+                        BinaryOp::Minus,
+                        expr_value.clone(),
+                        Value::Literal(Literal::Integer(1)),
+                        expr_value.clone(),
+                    ));
+                    self.current_body.push(Instruction::Copy {
+                        src: expr_value,
+                        dst: var.clone(),
+                    });
+                }
+            }
+            _ => self
+                .current_body
+                .push(Instruction::Unary(**op, expr_value, var.clone())),
+        }
         var
     }
 
@@ -187,6 +241,10 @@ impl ExprRefVisitor<Value> for GenerateTacky {
 impl StmtRefVisitor<()> for GenerateTacky {
     fn visit_expression(&mut self, expr: &ast::Expr) -> () {
         self.visit_expr(expr);
+    }
+
+    fn visit_goto(&mut self, label: &WithToken<String>) -> () {
+        self.current_body.push(Instruction::Jump((**label).clone()));
     }
 
     fn visit_if(&mut self, if_stmt: &ast::IfStmt) -> () {
@@ -209,6 +267,12 @@ impl StmtRefVisitor<()> for GenerateTacky {
         }
 
         self.current_body.push(Instruction::Label(end_label));
+    }
+
+    fn visit_label(&mut self, label: &ast::Label) -> () {
+        self.current_body
+            .push(Instruction::Label((*label.name).clone()));
+        self.visit_stmt(&label.next_stmt);
     }
 
     fn visit_null(&mut self) -> () {}
