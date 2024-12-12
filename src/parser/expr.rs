@@ -32,6 +32,7 @@ pub struct Binary {
 pub struct Unary {
     pub op: WithToken<UnaryOp>,
     pub expr: Box<Expr>,
+    pub postfix: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,8 @@ pub enum UnaryOp {
     Minus,
     Not,
     BitNOT,
+    Increment,
+    Decrement,
 }
 
 impl Display for UnaryOp {
@@ -54,6 +57,8 @@ impl Display for UnaryOp {
             UnaryOp::Minus => "-",
             UnaryOp::Not => "!",
             UnaryOp::BitNOT => "~",
+            UnaryOp::Increment => "++",
+            UnaryOp::Decrement => "--",
         };
         write!(f, "{}", op)
     }

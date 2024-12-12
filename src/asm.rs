@@ -245,7 +245,7 @@ fn unary_op_to_asm(op: &UnaryOp) -> &str {
     match op {
         UnaryOp::BitNOT => "notq",
         UnaryOp::Minus => "negq",
-        UnaryOp::Not => unreachable!(),
+        UnaryOp::Not | UnaryOp::Increment | UnaryOp::Decrement => unreachable!(),
     }
 }
 
@@ -259,7 +259,16 @@ fn binary_op_to_asm(op: &BinaryOp) -> &str {
         BinaryOp::BitwiseXOR => "xorq",
         BinaryOp::LShift => "shlq",
         BinaryOp::RShift => "shrq",
-        _ => unreachable!(),
+        BinaryOp::And
+        | BinaryOp::Div
+        | BinaryOp::Mod
+        | BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEq
+        | BinaryOp::Lesser
+        | BinaryOp::LesserEq
+        | BinaryOp::Or => unreachable!(),
     }
 }
 
@@ -443,13 +452,13 @@ impl Instruction {
                         ]);
                     }
                     _ => {
-                        body.extend_from_slice(&[
-                            Instruction::Mov {
+                        if vlhs != dest {
+                            body.push(Instruction::Mov {
                                 src: vlhs,
                                 dest: dest.clone(),
-                            },
-                            Instruction::Binary(*op, vrhs, dest),
-                        ]);
+                            });
+                        }
+                        body.push(Instruction::Binary(*op, vrhs, dest));
                     }
                 }
             }
@@ -478,7 +487,7 @@ impl Instruction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
     Imm(i64),
     Reg(Register),
@@ -509,7 +518,7 @@ impl From<&tacky::Value> for Operand {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
     AL,
     RAX,
