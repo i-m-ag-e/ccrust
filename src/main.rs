@@ -108,6 +108,7 @@ fn main() -> std::io::Result<()> {
                         .expect("path is not valid Unicode")
                         .to_string(),
                 )
+                .arg("-g")
                 .args(["-o", asm_file_path.with_extension("").to_str().unwrap()]);
             println!("Assemblig with command: {:?}", command);
             let assemble_success = command

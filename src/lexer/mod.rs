@@ -49,8 +49,9 @@ lazy_static! {
     static ref KEYWORDS: HashMap<&'static str, TokenType> = hash_map! {
         "else"   => TokenType::KElse,
         "for"    => TokenType::KFor,
-        "goto" => TokenType::KGoto,
+        "goto"   => TokenType::KGoto,
         "if"     => TokenType::KIf,
+        "int"    => TokenType::KInt,
         "return" => TokenType::KReturn,
         "while"  => TokenType::KWhile,
     };

@@ -239,6 +239,10 @@ impl ExprRefVisitor<Value> for GenerateTacky {
 }
 
 impl StmtRefVisitor<()> for GenerateTacky {
+    fn visit_compound(&mut self, block: &ast::Block) -> () {
+        block.0.iter().for_each(|b| self.visit_block_item(b));
+    }
+
     fn visit_expression(&mut self, expr: &ast::Expr) -> () {
         self.visit_expr(expr);
     }
@@ -251,7 +255,8 @@ impl StmtRefVisitor<()> for GenerateTacky {
         let (jump_not_true, end_label) = if if_stmt.else_clause.is_some() {
             (self.new_label("else"), self.new_label("end_if"))
         } else {
-            (self.new_label("end_if"), self.new_label("end_if"))
+            let new_label = self.new_label("end_if");
+            (new_label.clone(), new_label)
         };
 
         let result = self.visit_expr(&if_stmt.cond);
@@ -299,10 +304,7 @@ impl ASTRefVisitor for GenerateTacky {
     }
 
     fn visit_function_def(&mut self, function_def: &ast::FunctionDef) -> Self::FuncDefResult {
-        function_def
-            .body
-            .iter()
-            .for_each(|b| self.visit_block_item(b));
+        self.visit_compound(&function_def.body);
         self.current_body
             .push(Instruction::Return(Value::Literal(Literal::Integer(0))));
         let body = std::mem::replace(&mut self.current_body, Vec::new());

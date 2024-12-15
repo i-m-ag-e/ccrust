@@ -1,4 +1,4 @@
-use super::{expr::Expr, WithToken};
+use super::{expr::Expr, BlockItem, WithToken};
 
 #[derive(Debug)]
 pub struct IfStmt {
@@ -14,7 +14,11 @@ pub struct Label {
 }
 
 #[derive(Debug)]
+pub struct Block(pub Vec<BlockItem>);
+
+#[derive(Debug)]
 pub enum Stmt {
+    Compound(Block),
     Expression(Expr),
     Goto(WithToken<String>),
     If(IfStmt),
@@ -24,6 +28,7 @@ pub enum Stmt {
 }
 
 pub trait StmtRefVisitor<R> {
+    fn visit_compound(&mut self, block: &Block) -> R;
     fn visit_expression(&mut self, expr: &Expr) -> R;
     fn visit_goto(&mut self, label: &WithToken<String>) -> R;
     fn visit_if(&mut self, if_stmt: &IfStmt) -> R;
@@ -33,6 +38,7 @@ pub trait StmtRefVisitor<R> {
 }
 
 pub trait StmtVisitor<R> {
+    fn visit_compound(&mut self, block: Block) -> R;
     fn visit_expression(&mut self, expr: Expr) -> R;
     fn visit_goto(&mut self, label: WithToken<String>) -> R;
     fn visit_if(&mut self, if_stmt: IfStmt) -> R;

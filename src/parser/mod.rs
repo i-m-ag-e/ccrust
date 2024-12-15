@@ -52,6 +52,12 @@ pub enum ParseErrorType {
 
     #[error("redifinition of label `{0}` (previous definition at {1:?}")]
     RedefinedLabel(String, Token),
+
+    #[error("cannot declare {decl_type} in {context}")]
+    InvalidDeclaration {
+        decl_type: &'static str,
+        context: &'static str,
+    },
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -186,6 +192,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn error_at(&mut self, token: Token, error: ParseErrorType) -> ParseError {
+        ParseError { token, error }
+    }
+
     fn error_at_current(&mut self, error: ParseErrorType) -> ParseError {
         if let Some(token) = self.advance() {
             ParseError { token, error }
@@ -212,7 +222,7 @@ impl<'a> Parser<'a> {
     }
 
     fn function_def(&mut self) -> ParseResult<FunctionDef> {
-        self.consume(TokenType::Identifier(String::from("int")), "int")?;
+        self.consume(TokenType::KInt, "int")?;
 
         let name = self.consume_identifier()?;
 
@@ -220,26 +230,16 @@ impl<'a> Parser<'a> {
         self.consume(TokenType::Identifier(String::from("void")), "void")?;
         self.consume(TokenType::RParen, ")")?;
 
-        self.consume(TokenType::LBrace, "{")?;
-
-        let mut body = Vec::new();
-        loop {
-            match self.peek_token_type() {
-                Some(TokenType::RBrace) => break,
-                _ => body.push(self.block_item()?),
-            };
-        }
-
-        self.consume(TokenType::RBrace, "}")?;
+        let body = self.compound("function")?;
         self.current_function_labels.clear();
 
         Ok(FunctionDef { name, body })
     }
 
-    fn block_item(&mut self) -> ParseResult<BlockItem> {
+    fn block_item(&mut self, context: &'static str) -> ParseResult<BlockItem> {
         match self.peek_token_type() {
-            Some(TokenType::Identifier(name)) if name == "int" => self.declaration(),
-            _ => Ok(BlockItem::Stmt(self.statement()?)),
+            Some(TokenType::KInt) => self.declaration(),
+            _ => Ok(BlockItem::Stmt(self.statement(context)?)),
         }
     }
 }
@@ -453,8 +453,9 @@ impl<'a> Parser<'a> {
         Ok(BlockItem::VarDecl(VarDecl { name, init }))
     }
 
-    fn statement(&mut self) -> ParseResult<Stmt> {
+    fn statement(&mut self, context: &'static str) -> ParseResult<Stmt> {
         match self.peek_token_type() {
+            Some(TokenType::LBrace) => self.compound(context).map(Stmt::Compound),
             Some(TokenType::KGoto) => self.goto_stmt(),
             Some(TokenType::KIf) => self.if_stmt(),
             Some(TokenType::KReturn) => self.return_statement(),
@@ -462,13 +463,25 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Stmt::Null)
             }
+            Some(TokenType::KInt) => {
+                let BlockItem::VarDecl(decl) = self.declaration()? else {
+                    unreachable!()
+                };
+                Err(self.error_at(
+                    decl.name.1,
+                    ParseErrorType::InvalidDeclaration {
+                        decl_type: "variable",
+                        context,
+                    },
+                ))
+            }
             Some(TokenType::Identifier(_)) => {
                 if let Some(Token {
                     tok_type: TokenType::Colon,
                     ..
                 }) = self.peek_next()
                 {
-                    self.label()
+                    self.label(context)
                 } else {
                     self.expression_statement()
                 }
@@ -477,24 +490,40 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn compound(&mut self, context: &'static str) -> ParseResult<Block> {
+        self.consume(TokenType::LBrace, "{")?;
+
+        let mut body = Vec::new();
+        loop {
+            match self.peek_token_type() {
+                Some(TokenType::RBrace) => break,
+                _ => body.push(self.block_item(context)?),
+            };
+        }
+
+        self.consume(TokenType::RBrace, "}")?;
+
+        Ok(Block(body))
+    }
+
     fn goto_stmt(&mut self) -> ParseResult<Stmt> {
-        self.advance();
+        self.consume(TokenType::KGoto, "goto")?;
         let label = self.consume_identifier()?;
         self.consume(TokenType::Semicolon, ";")?;
         Ok(Stmt::Goto(label))
     }
 
     fn if_stmt(&mut self) -> ParseResult<Stmt> {
-        self.advance();
+        self.consume(TokenType::KIf, "if")?;
 
         self.consume(TokenType::LParen, "(")?;
         let cond = self.expression()?;
         self.consume(TokenType::RParen, ")")?;
 
-        let then = Box::new(self.statement()?);
+        let then = Box::new(self.statement("if statement")?);
         let else_clause = if let Some(TokenType::KElse) = self.peek_token_type() {
             self.advance();
-            Some(Box::new(self.statement()?))
+            Some(Box::new(self.statement("if statement")?))
         } else {
             None
         };
@@ -507,13 +536,13 @@ impl<'a> Parser<'a> {
     }
 
     fn return_statement(&mut self) -> ParseResult<Stmt> {
-        self.advance();
+        self.consume(TokenType::KReturn, "return")?;
         let ret_value = self.expression()?;
         self.consume(TokenType::Semicolon, ";")?;
         Ok(Stmt::Return { ret_value })
     }
 
-    fn label(&mut self) -> ParseResult<Stmt> {
+    fn label(&mut self, context: &'static str) -> ParseResult<Stmt> {
         let name = self.consume_identifier()?;
 
         if let Some(prev_token) = self.current_function_labels.iter().find(|l| ***l == *name) {
@@ -526,7 +555,7 @@ impl<'a> Parser<'a> {
         }
 
         self.advance(); // consume the colon
-        let next_stmt = Box::new(self.statement()?);
+        let next_stmt = Box::new(self.statement(context)?);
         Ok(Stmt::Label(Label { name, next_stmt }))
     }
 

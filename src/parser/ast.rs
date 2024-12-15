@@ -39,7 +39,7 @@ pub struct Program(pub Vec<FunctionDef>);
 #[derive(Debug)]
 pub struct FunctionDef {
     pub name: WithToken<String>,
-    pub body: Vec<BlockItem>,
+    pub body: Block,
 }
 
 #[derive(Debug)]
@@ -73,6 +73,7 @@ pub trait ASTRefVisitor:
 
     fn visit_stmt(&mut self, stmt: &Stmt) -> Self::StmtResult {
         match stmt {
+            Stmt::Compound(block) => self.visit_compound(block),
             Stmt::Expression(expr) => self.visit_expression(expr),
             Stmt::Goto(label) => self.visit_goto(label),
             Stmt::If(if_stmt) => self.visit_if(if_stmt),
@@ -111,6 +112,7 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
 
     fn visit_stmt(&mut self, stmt: Stmt) -> Self::StmtResult {
         match stmt {
+            Stmt::Compound(block) => self.visit_compound(block),
             Stmt::Expression(expr) => self.visit_expression(expr),
             Stmt::Goto(label) => self.visit_goto(label),
             Stmt::If(if_stmt) => self.visit_if(if_stmt),

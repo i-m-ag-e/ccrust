@@ -124,6 +124,24 @@ impl ExprRefVisitor<String> for PrettyPrint {
 }
 
 impl StmtRefVisitor<String> for PrettyPrint {
+    fn visit_compound(&mut self, block: &Block) -> String {
+        self.indent += 1;
+        let block_str = format!(
+            "{0}{1}\n{3}\n{0}{2}",
+            self.indent_now(),
+            "{".yellow().bold(),
+            "}".yellow().bold(),
+            block
+                .0
+                .iter()
+                .map(|item| self.visit_block_item(item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        self.indent -= 1;
+        block_str
+    }
+
     fn visit_expression(&mut self, expr: &Expr) -> String {
         self.indent += 1;
         let expr_str = format!(
@@ -227,6 +245,7 @@ impl ASTRefVisitor for PrettyPrint {
         self.indent += 1;
         let body_str = function_def
             .body
+            .0
             .iter()
             .map(|item| self.visit_block_item(item))
             .collect::<Vec<_>>()
