@@ -56,6 +56,7 @@ pub enum TokenType {
     KFor,
     KGoto,
     KIf,
+    KInt,
     KReturn,
     KWhile,
 

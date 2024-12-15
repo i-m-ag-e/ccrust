@@ -1,6 +1,8 @@
+mod scoped_var_map;
+
 use crate::lexer::token::Token;
 use crate::parser::ast::*;
-use std::collections::HashMap;
+use scoped_var_map::ScopedVarMap;
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -21,15 +23,18 @@ pub enum ResolverErrorType {
     InvalidLValue,
 }
 
+pub type ScopeDepth = i32;
+pub type MapEntry = WithToken<String>;
+
 pub struct Resolver {
-    var_map: HashMap<String, WithToken<String>>,
+    scope: ScopedVarMap,
     scope_depth: i32,
 }
 
 impl Resolver {
     pub fn new() -> Resolver {
         Resolver {
-            var_map: HashMap::new(),
+            scope: ScopedVarMap::new(),
             scope_depth: 0,
         }
     }
@@ -86,7 +91,7 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
     }
 
     fn visit_var(&mut self, name: WithToken<String>) -> ResolveResult<Expr> {
-        if let Some(val) = self.var_map.get(&**name) {
+        if let Some(val) = self.scope.lookup(&**name) {
             Ok(Expr::Var(val.clone()))
         } else {
             Err(ResolveError {
@@ -98,6 +103,23 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
 }
 
 impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
+    fn visit_compound(&mut self, block: Block) -> ResolveResult<Stmt> {
+        self.scope.insert_scope();
+        self.scope_depth += 1;
+
+        let block = Block(
+            block
+                .0
+                .into_iter()
+                .map(|b| self.visit_block_item(b))
+                .collect::<ResolveResult<_>>()?,
+        );
+
+        self.scope_depth -= 1;
+        self.scope.unwind();
+        Ok(Stmt::Compound(block))
+    }
+
     fn visit_expression(&mut self, expr: Expr) -> ResolveResult<Stmt> {
         Ok(Stmt::Expression(self.visit_expr(expr)?))
     }
@@ -151,11 +173,9 @@ impl ASTVisitor for Resolver {
     }
 
     fn visit_function_def(&mut self, function_def: FunctionDef) -> Self::FuncDefResult {
-        let body = function_def
-            .body
-            .into_iter()
-            .map(|b| self.visit_block_item(b))
-            .collect::<Result<Vec<_>, _>>()?;
+        let Stmt::Compound(body) = self.visit_compound(function_def.body)? else {
+            unreachable!();
+        };
         Ok(FunctionDef {
             name: function_def.name,
             body,
@@ -171,27 +191,34 @@ impl ASTVisitor for Resolver {
     }
 
     fn visit_var_decl(&mut self, var_decl: VarDecl) -> Self::VarDeclResult {
-        if let Some(WithToken(_, tok)) = self.var_map.get(&*var_decl.name) {
-            let prev_token = tok.clone();
-            let token = var_decl.name.1;
-            Err(ResolveError {
-                token,
-                error_type: ResolverErrorType::DuplicateVariable { prev_token },
-            })
-        } else {
-            let old_name = var_decl.name;
-            let new_name = WithToken(self.make_unique(&old_name.0), old_name.1);
+        println!(
+            "scope stack: {:#?}, scope depth: {}\n",
+            self.scope, self.scope_depth
+        );
+        match self.scope.get(&*var_decl.name) {
+            Some(WithToken(_, tok)) => {
+                let prev_token = tok.clone();
+                let token = var_decl.name.1;
+                Err(ResolveError {
+                    token,
+                    error_type: ResolverErrorType::DuplicateVariable { prev_token },
+                })
+            }
+            _ => {
+                let old_name = var_decl.name;
+                let new_name = WithToken(self.make_unique(&old_name.0), old_name.1);
 
-            self.var_map.insert(old_name.0, new_name.clone());
+                self.scope.insert(old_name.0, new_name.clone());
 
-            let new_init = var_decl
-                .init
-                .map(|expr| self.visit_expr(expr))
-                .transpose()?;
-            Ok(VarDecl {
-                name: new_name,
-                init: new_init,
-            })
+                let new_init = var_decl
+                    .init
+                    .map(|expr| self.visit_expr(expr))
+                    .transpose()?;
+                Ok(VarDecl {
+                    name: new_name,
+                    init: new_init,
+                })
+            }
         }
     }
 }
