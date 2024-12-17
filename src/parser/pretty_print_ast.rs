@@ -204,7 +204,7 @@ impl StmtRefVisitor<String> for PrettyPrint {
         format!("{}{}", Self::INDENT.repeat(self.indent), "NULL".red())
     }
 
-    fn visit_return(&mut self, ret_value: &Expr) -> String {
+    fn visit_return(&mut self, ret_value: &WithToken<Expr>) -> String {
         self.indent += 1;
         let ret_str = format!(
             "{}{} \x0b{}",
