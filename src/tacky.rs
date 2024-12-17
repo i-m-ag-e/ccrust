@@ -1,3 +1,4 @@
+use crate::debug_info::{DebugInfo, WithDebugInfo};
 use crate::parser::ast::{
     self, ASTRefVisitor, BinaryOp, BlockItem, ExprRefVisitor, Literal, StmtRefVisitor, WithToken,
 };
@@ -8,7 +9,7 @@ pub struct Program(pub Vec<FunctionDef>);
 #[derive(Debug)]
 pub struct FunctionDef {
     pub name: String,
-    pub body: Vec<Instruction>,
+    pub body: Vec<WithDebugInfo<Instruction>>,
 }
 
 pub type Target = String;
@@ -31,10 +32,20 @@ pub enum Value {
     Var(String),
 }
 
+impl Value {
+    pub fn to_string(&self) -> String {
+        match self {
+            Value::Literal(Literal::Integer(i)) => format!("${}", i),
+            Value::Literal(Literal::Float(f)) => format!("${}", f),
+            Value::Var(name) => name.clone(),
+        }
+    }
+}
+
 pub struct GenerateTacky {
     var_counter: i32,
     label_counter: i32,
-    current_body: Vec<Instruction>,
+    current_body: Vec<WithDebugInfo<Instruction>>,
 }
 
 impl GenerateTacky {
@@ -56,6 +67,11 @@ impl GenerateTacky {
         self.label_counter += 1;
         format!("l.{}.{}", desc, self.label_counter - 1)
     }
+
+    fn push_inst(&mut self, line: usize, description: String, inst: Instruction) {
+        self.current_body
+            .push(WithDebugInfo::new(inst, DebugInfo { line, description }));
+    }
 }
 
 impl ExprRefVisitor<Value> for GenerateTacky {
@@ -63,15 +79,33 @@ impl ExprRefVisitor<Value> for GenerateTacky {
         let result = self.visit_expr(&expr.rhs);
         // lhs guarateed to be Var(_), so dst will be a Value::Var(_)
         let dest = self.visit_expr(&expr.lhs);
-        self.current_body.push(Instruction::Copy {
-            src: result,
-            dst: dest.clone(),
-        });
+
+        let debug_info = DebugInfo {
+            line: expr.eq_sign.line,
+            description: format!(
+                "(assignment) `{}` ({}) = {} (result)",
+                if let Value::Var(ref name) = dest {
+                    name
+                } else {
+                    unreachable!()
+                },
+                dest.to_string(),
+                result.to_string()
+            ),
+        };
+        self.current_body.push(WithDebugInfo::new(
+            Instruction::Copy {
+                src: result,
+                dst: dest.clone(),
+            },
+            debug_info,
+        ));
         dest
     }
 
     fn visit_binary(&mut self, expr: &ast::Binary) -> Value {
         let ast::Binary { op, lhs, rhs } = expr;
+        let line = expr.op.1.line;
         match **op {
             BinaryOp::And => {
                 let dst = self.new_var();
@@ -79,24 +113,43 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                 let end_label = self.new_label("and_end");
 
                 let vlhs = self.visit_expr(lhs);
-                self.current_body
-                    .push(Instruction::JumpIfZero(vlhs, false_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(&&) when lhs `{}` is false", vlhs.to_string()),
+                    Instruction::JumpIfZero(vlhs, false_label.clone()),
+                );
+
                 let vrhs = self.visit_expr(rhs);
-                self.current_body
-                    .push(Instruction::JumpIfZero(vrhs, false_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(&&) when rhs `{}` is also false", vrhs.to_string()),
+                    Instruction::JumpIfZero(vrhs, false_label.clone()),
+                );
 
-                self.current_body.push(Instruction::Copy {
-                    src: Value::Literal(Literal::Integer(1)),
-                    dst: dst.clone(),
-                });
-                self.current_body.push(Instruction::Jump(end_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(&&) (both true) `{}` (result) = 1", dst.to_string()),
+                    Instruction::Copy {
+                        src: Value::Literal(Literal::Integer(1)),
+                        dst: dst.clone(),
+                    },
+                );
+                self.push_inst(
+                    line,
+                    format!("(&&) (both true) jump to end"),
+                    Instruction::Jump(end_label.clone()),
+                );
 
-                self.current_body.push(Instruction::Label(false_label));
-                self.current_body.push(Instruction::Copy {
-                    src: Value::Literal(Literal::Integer(0)),
-                    dst: dst.clone(),
-                });
-                self.current_body.push(Instruction::Label(end_label));
+                self.push_inst(line, "".to_string(), Instruction::Label(false_label));
+                self.push_inst(
+                    line,
+                    format!("(&&) (false) `{}` (result) = 0", dst.to_string()),
+                    Instruction::Copy {
+                        src: Value::Literal(Literal::Integer(0)),
+                        dst: dst.clone(),
+                    },
+                );
+                self.push_inst(line, "".to_string(), Instruction::Label(end_label));
 
                 dst
             }
@@ -106,24 +159,44 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                 let end_label = self.new_label("or_end");
 
                 let vlhs = self.visit_expr(lhs);
-                self.current_body
-                    .push(Instruction::JumpIfNotZero(vlhs, true_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(||) when lhs `{}` is true", vlhs.to_string()),
+                    Instruction::JumpIfNotZero(vlhs, true_label.clone()),
+                );
+
                 let vrhs = self.visit_expr(rhs);
-                self.current_body
-                    .push(Instruction::JumpIfNotZero(vrhs, true_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(||) when rhs `{}` is true", vrhs.to_string()),
+                    Instruction::JumpIfNotZero(vrhs, true_label.clone()),
+                );
 
-                self.current_body.push(Instruction::Copy {
-                    src: Value::Literal(Literal::Integer(0)),
-                    dst: dst.clone(),
-                });
-                self.current_body.push(Instruction::Jump(end_label.clone()));
+                self.push_inst(
+                    line,
+                    format!("(||) (both false) `{}` (result) = 0", dst.to_string()),
+                    Instruction::Copy {
+                        src: Value::Literal(Literal::Integer(0)),
+                        dst: dst.clone(),
+                    },
+                );
+                self.push_inst(
+                    line,
+                    format!("(||) (both false) jump to end"),
+                    Instruction::Jump(end_label.clone()),
+                );
 
-                self.current_body.push(Instruction::Label(true_label));
-                self.current_body.push(Instruction::Copy {
-                    src: Value::Literal(Literal::Integer(1)),
-                    dst: dst.clone(),
-                });
-                self.current_body.push(Instruction::Label(end_label));
+                self.push_inst(line, "".to_string(), Instruction::Label(true_label));
+
+                self.push_inst(
+                    line,
+                    format!("(||) (true) `{}` (result) = 1", dst.to_string()),
+                    Instruction::Copy {
+                        src: Value::Literal(Literal::Integer(1)),
+                        dst: dst.clone(),
+                    },
+                );
+                self.push_inst(line, "".to_string(), Instruction::Label(end_label));
 
                 dst
             }
@@ -131,8 +204,11 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                 let vlhs = self.visit_expr(lhs);
                 let vrhs = self.visit_expr(rhs);
                 let dst = self.new_var();
-                self.current_body
-                    .push(Instruction::Binary(op, vlhs, vrhs, dst.clone()));
+                self.push_inst(
+                    line,
+                    format!("`{}` {} `{}`", vlhs.to_string(), op, vrhs.to_string()),
+                    Instruction::Binary(op, vlhs, vrhs, dst.clone()),
+                );
                 dst
             }
         }
@@ -143,26 +219,57 @@ impl ExprRefVisitor<Value> for GenerateTacky {
         let end_label = self.new_label("end_condexpr");
 
         let result = self.visit_expr(&expr.cond);
-        self.current_body
-            .push(Instruction::JumpIfZero(result, else_label.clone()));
+        self.push_inst(
+            expr.qmark.line,
+            format!("(c?t:e) condition is false"),
+            Instruction::JumpIfZero(result, else_label.clone()),
+        );
 
         let dst = self.new_var();
 
         let res_if = self.visit_expr(&expr.then_expr);
-        self.current_body.push(Instruction::Copy {
-            src: res_if,
-            dst: dst.clone(),
-        });
-        self.current_body.push(Instruction::Jump(end_label.clone()));
+        self.push_inst(
+            expr.qmark.line,
+            format!(
+                "(c?t:e) {} (expr_result) = {} (then_result)",
+                dst.to_string(),
+                res_if.to_string()
+            ),
+            Instruction::Copy {
+                src: res_if,
+                dst: dst.clone(),
+            },
+        );
+        self.push_inst(
+            expr.qmark.line,
+            "(c?t:e)".to_string(),
+            Instruction::Jump(end_label.clone()),
+        );
 
-        self.current_body.push(Instruction::Label(else_label));
+        self.push_inst(
+            expr.colon.line,
+            "(c?t:e) e:".to_string(),
+            Instruction::Label(else_label),
+        );
         let res_else = self.visit_expr(&expr.else_expr);
-        self.current_body.push(Instruction::Copy {
-            src: res_else,
-            dst: dst.clone(),
-        });
+        self.push_inst(
+            expr.colon.line,
+            format!(
+                "(c?t:e) {} (expr_result) = {} (else_result)",
+                dst.to_string(),
+                res_else.to_string()
+            ),
+            Instruction::Copy {
+                src: res_else,
+                dst: dst.clone(),
+            },
+        );
 
-        self.current_body.push(Instruction::Label(end_label));
+        self.push_inst(
+            expr.colon.line,
+            "(c?t:e)".to_string(),
+            Instruction::Label(end_label),
+        );
         dst
     }
 
@@ -173,62 +280,97 @@ impl ExprRefVisitor<Value> for GenerateTacky {
     fn visit_unary(&mut self, expr: &ast::Unary) -> Value {
         let ast::Unary { op, expr, postfix } = expr;
         let expr_value = self.visit_expr(expr);
+        let line = op.1.line;
         let var = self.new_var();
 
         match **op {
             ast::UnaryOp::Increment => {
                 if *postfix {
-                    self.current_body.push(Instruction::Copy {
-                        src: expr_value.clone(),
-                        dst: var.clone(),
-                    });
-                    self.current_body.push(Instruction::Binary(
-                        BinaryOp::Plus,
-                        expr_value.clone(),
-                        Value::Literal(Literal::Integer(1)),
-                        expr_value,
-                    ));
+                    self.push_inst(
+                        line,
+                        format!("(p++) copy final result of expr"),
+                        Instruction::Copy {
+                            src: expr_value.clone(),
+                            dst: var.clone(),
+                        },
+                    );
+                    self.push_inst(
+                        line,
+                        format!("(p++)  {} += 1", expr_value.to_string()),
+                        Instruction::Binary(
+                            BinaryOp::Plus,
+                            expr_value.clone(),
+                            Value::Literal(Literal::Integer(1)),
+                            expr_value,
+                        ),
+                    );
                 } else {
-                    self.current_body.push(Instruction::Binary(
-                        BinaryOp::Plus,
-                        expr_value.clone(),
-                        Value::Literal(Literal::Integer(1)),
-                        expr_value.clone(),
-                    ));
-                    self.current_body.push(Instruction::Copy {
-                        src: expr_value,
-                        dst: var.clone(),
-                    });
+                    self.push_inst(
+                        line,
+                        format!("(++) {} += 1", expr_value.to_string()),
+                        Instruction::Binary(
+                            BinaryOp::Plus,
+                            expr_value.clone(),
+                            Value::Literal(Literal::Integer(1)),
+                            expr_value.clone(),
+                        ),
+                    );
+                    self.push_inst(
+                        line,
+                        format!("(++) copy final result of expr"),
+                        Instruction::Copy {
+                            src: expr_value,
+                            dst: var.clone(),
+                        },
+                    );
                 }
             }
             ast::UnaryOp::Decrement => {
                 if *postfix {
-                    self.current_body.push(Instruction::Copy {
-                        src: expr_value.clone(),
-                        dst: var.clone(),
-                    });
-                    self.current_body.push(Instruction::Binary(
-                        BinaryOp::Minus,
-                        expr_value.clone(),
-                        Value::Literal(Literal::Integer(1)),
-                        expr_value,
-                    ));
+                    self.push_inst(
+                        line,
+                        format!("(p--) copy final result of expr"),
+                        Instruction::Copy {
+                            src: expr_value.clone(),
+                            dst: var.clone(),
+                        },
+                    );
+                    self.push_inst(
+                        line,
+                        format!("(p--)  {} -= 1", expr_value.to_string()),
+                        Instruction::Binary(
+                            BinaryOp::Minus,
+                            expr_value.clone(),
+                            Value::Literal(Literal::Integer(1)),
+                            expr_value,
+                        ),
+                    );
                 } else {
-                    self.current_body.push(Instruction::Binary(
-                        BinaryOp::Minus,
-                        expr_value.clone(),
-                        Value::Literal(Literal::Integer(1)),
-                        expr_value.clone(),
-                    ));
-                    self.current_body.push(Instruction::Copy {
-                        src: expr_value,
-                        dst: var.clone(),
-                    });
+                    self.push_inst(
+                        line,
+                        format!("(--) {} -= 1", expr_value.to_string()),
+                        Instruction::Binary(
+                            BinaryOp::Minus,
+                            expr_value.clone(),
+                            Value::Literal(Literal::Integer(1)),
+                            expr_value.clone(),
+                        ),
+                    );
+                    self.push_inst(
+                        line,
+                        format!("(--) copy final result of expr"),
+                        Instruction::Copy {
+                            src: expr_value,
+                            dst: var.clone(),
+                        },
+                    );
                 }
             }
-            _ => self
-                .current_body
-                .push(Instruction::Unary(**op, expr_value, var.clone())),
+            _ => self.push_inst(
+                line,
+                format!("(unary) {} {}", **op, expr_value.to_string()),
+                Instruction::Unary(**op, expr_value, var.clone()),
+            ),
         }
         var
     }
@@ -248,7 +390,11 @@ impl StmtRefVisitor<()> for GenerateTacky {
     }
 
     fn visit_goto(&mut self, label: &WithToken<String>) -> () {
-        self.current_body.push(Instruction::Jump((**label).clone()));
+        self.push_inst(
+            label.1.line,
+            "goto".to_string(),
+            Instruction::Jump((**label).clone()),
+        );
     }
 
     fn visit_if(&mut self, if_stmt: &ast::IfStmt) -> () {
@@ -260,31 +406,49 @@ impl StmtRefVisitor<()> for GenerateTacky {
         };
 
         let result = self.visit_expr(&if_stmt.cond);
-        self.current_body
-            .push(Instruction::JumpIfZero(result, jump_not_true.clone()));
+        self.push_inst(
+            if_stmt.cond.1.line,
+            format!("condition not true"),
+            Instruction::JumpIfZero(result, jump_not_true.clone()),
+        );
 
         self.visit_stmt(&if_stmt.then);
 
         if let Some(ref else_clause) = if_stmt.else_clause {
-            self.current_body.push(Instruction::Jump(end_label.clone()));
-            self.current_body.push(Instruction::Label(jump_not_true));
+            self.push_inst(
+                else_clause.1.line,
+                "condition true (skip else)".to_string(),
+                Instruction::Jump(end_label.clone()),
+            );
+            self.push_inst(
+                else_clause.1.line,
+                "".to_string(),
+                Instruction::Label(jump_not_true),
+            );
             self.visit_stmt(&else_clause);
         }
 
-        self.current_body.push(Instruction::Label(end_label));
+        self.push_inst(
+            if_stmt.cond.1.line,
+            "".to_string(),
+            Instruction::Label(end_label),
+        );
     }
 
     fn visit_label(&mut self, label: &ast::Label) -> () {
-        self.current_body
-            .push(Instruction::Label((*label.name).clone()));
+        self.push_inst(
+            label.name.1.line,
+            "".to_string(),
+            Instruction::Label((*label.name).clone()),
+        );
         self.visit_stmt(&label.next_stmt);
     }
 
     fn visit_null(&mut self) -> () {}
 
-    fn visit_return(&mut self, ret_value: &ast::Expr) -> () {
-        let ret_value = self.visit_expr(ret_value);
-        self.current_body.push(Instruction::Return(ret_value));
+    fn visit_return(&mut self, ret_value: &WithToken<ast::Expr>) -> () {
+        let ret = self.visit_expr(ret_value);
+        self.push_inst(ret_value.1.line, "".to_string(), Instruction::Return(ret));
     }
 }
 
@@ -305,8 +469,11 @@ impl ASTRefVisitor for GenerateTacky {
 
     fn visit_function_def(&mut self, function_def: &ast::FunctionDef) -> Self::FuncDefResult {
         self.visit_compound(&function_def.body);
-        self.current_body
-            .push(Instruction::Return(Value::Literal(Literal::Integer(0))));
+        self.push_inst(
+            function_def.name.1.line,
+            "return 0".to_string(),
+            Instruction::Return(Value::Literal(Literal::Integer(0))),
+        );
         let body = std::mem::replace(&mut self.current_body, Vec::new());
         FunctionDef {
             name: function_def.name.0.clone(),
@@ -327,7 +494,11 @@ impl ASTRefVisitor for GenerateTacky {
         if let Some(ref expr) = var_decl.init {
             let dst = self.visit_var(&var_decl.name);
             let src = self.visit_expr(expr);
-            self.current_body.push(Instruction::Copy { src, dst });
+            self.push_inst(
+                var_decl.name.1.line,
+                format!("(decl) {} = <init>", &*var_decl.name),
+                Instruction::Copy { src, dst },
+            );
         }
     }
 }
