@@ -40,6 +40,8 @@ pub struct Conditional {
     pub cond: Box<Expr>,
     pub then_expr: Box<Expr>,
     pub else_expr: Box<Expr>,
+    pub qmark: Token,
+    pub colon: Token,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,6 +124,15 @@ impl Display for BinaryOp {
 pub enum Literal {
     Integer(i64),
     Float(f64),
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Integer(i) => write!(f, "{}", i),
+            Literal::Float(fl) => write!(f, "{}", fl),
+        }
+    }
 }
 
 pub trait ExprRefVisitor<R> {
