@@ -18,6 +18,22 @@ impl<T> WithToken<T> {
     pub fn replace(&mut self, new_val: T) -> T {
         std::mem::replace(&mut self.0, new_val)
     }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> WithToken<U> {
+        WithToken(f(self.0), self.1)
+    }
+}
+
+impl<T, E> WithToken<Result<T, E>> {
+    pub fn transpose(self) -> Result<WithToken<T>, E> {
+        self.0.map(|t| WithToken(t, self.1))
+    }
+}
+
+impl<T> WithToken<Option<T>> {
+    pub fn transpose(self) -> Option<WithToken<T>> {
+        self.0.map(|t| WithToken(t, self.1))
+    }
 }
 
 impl<T> Deref for WithToken<T> {

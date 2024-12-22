@@ -2,9 +2,9 @@ use super::{expr::Expr, BlockItem, WithToken};
 
 #[derive(Debug)]
 pub struct IfStmt {
-    pub cond: Expr,
+    pub cond: WithToken<Expr>,
     pub then: Box<Stmt>,
-    pub else_clause: Option<Box<Stmt>>,
+    pub else_clause: Option<Box<WithToken<Stmt>>>,
 }
 
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub enum Stmt {
     If(IfStmt),
     Label(Label),
     Null,
-    Return { ret_value: Expr },
+    Return { ret_value: WithToken<Expr> },
 }
 
 pub trait StmtRefVisitor<R> {
@@ -34,7 +34,7 @@ pub trait StmtRefVisitor<R> {
     fn visit_if(&mut self, if_stmt: &IfStmt) -> R;
     fn visit_label(&mut self, label: &Label) -> R;
     fn visit_null(&mut self) -> R;
-    fn visit_return(&mut self, ret_value: &Expr) -> R;
+    fn visit_return(&mut self, ret_value: &WithToken<Expr>) -> R;
 }
 
 pub trait StmtVisitor<R> {
@@ -44,5 +44,5 @@ pub trait StmtVisitor<R> {
     fn visit_if(&mut self, if_stmt: IfStmt) -> R;
     fn visit_label(&mut self, label: Label) -> R;
     fn visit_null(&mut self) -> R;
-    fn visit_return(&mut self, ret_value: Expr) -> R;
+    fn visit_return(&mut self, ret_value: WithToken<Expr>) -> R;
 }
