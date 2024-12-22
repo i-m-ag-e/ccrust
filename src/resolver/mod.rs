@@ -75,8 +75,6 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
             cond: Box::new(self.visit_expr(*expr.cond)?),
             then_expr: Box::new(self.visit_expr(*expr.then_expr)?),
             else_expr: Box::new(self.visit_expr(*expr.else_expr)?),
-            qmark: expr.qmark,
-            colon: expr.colon,
         }))
     }
 
@@ -132,11 +130,11 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
 
     fn visit_if(&mut self, if_stmt: IfStmt) -> ResolveResult<Stmt> {
         Ok(Stmt::If(IfStmt {
-            cond: if_stmt.cond.map(|c| self.visit_expr(c)).transpose()?,
+            cond: self.visit_expr(if_stmt.cond)?,
             then: Box::new(self.visit_stmt(*if_stmt.then)?),
             else_clause: if_stmt
                 .else_clause
-                .map(|ec| ec.map(|e| self.visit_stmt(e)).transpose())
+                .map(|ec| self.visit_stmt(*ec))
                 .transpose()?
                 .map(Box::new),
         }))
@@ -152,9 +150,9 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
     fn visit_null(&mut self) -> ResolveResult<Stmt> {
         Ok(Stmt::Null)
     }
-    fn visit_return(&mut self, ret_value: WithToken<Expr>) -> ResolveResult<Stmt> {
+    fn visit_return(&mut self, ret_value: Expr) -> ResolveResult<Stmt> {
         Ok(Stmt::Return {
-            ret_value: WithToken(self.visit_expr(ret_value.0)?, ret_value.1),
+            ret_value: self.visit_expr(ret_value)?,
         })
     }
 }

@@ -303,17 +303,15 @@ impl<'a> Parser<'a> {
     fn conditional_expr(&mut self) -> ParseResult<Expr> {
         let cond = self.or()?;
         if let Some(TokenType::QMark) = self.peek_token_type() {
-            let qmark = self.advance().unwrap();
+            self.advance();
             let then_expr = Box::new(self.expression()?);
-            let colon = self.consume(TokenType::Colon, ":")?;
+            self.consume(TokenType::Colon, ";")?;
             let else_expr = Box::new(self.conditional_expr()?);
 
             Ok(Expr::Conditional(Conditional {
                 cond: Box::new(cond),
                 then_expr,
                 else_expr,
-                qmark,
-                colon,
             }))
         } else {
             Ok(cond)
@@ -518,14 +516,14 @@ impl<'a> Parser<'a> {
     fn if_stmt(&mut self) -> ParseResult<Stmt> {
         self.consume(TokenType::KIf, "if")?;
 
-        let token = self.consume(TokenType::LParen, "(")?;
-        let cond = WithToken(self.expression()?, token);
+        self.consume(TokenType::LParen, "(")?;
+        let cond = self.expression()?;
         self.consume(TokenType::RParen, ")")?;
 
         let then = Box::new(self.statement("if statement")?);
         let else_clause = if let Some(TokenType::KElse) = self.peek_token_type() {
-            let token = self.advance().unwrap();
-            Some(Box::new(WithToken(self.statement("if statement")?, token)))
+            self.advance();
+            Some(Box::new(self.statement("if statement")?))
         } else {
             None
         };
@@ -538,8 +536,8 @@ impl<'a> Parser<'a> {
     }
 
     fn return_statement(&mut self) -> ParseResult<Stmt> {
-        let token = self.consume(TokenType::KReturn, "return")?;
-        let ret_value = WithToken(self.expression()?, token);
+        self.consume(TokenType::KReturn, "return")?;
+        let ret_value = self.expression()?;
         self.consume(TokenType::Semicolon, ";")?;
         Ok(Stmt::Return { ret_value })
     }

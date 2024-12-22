@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
-use crate::debug_info::{DebugInfo, WithDebugInfo};
 use crate::parser::ast::{self, BinaryOp, UnaryOp};
 use crate::tacky;
 
@@ -75,7 +74,7 @@ impl Program {
         for def in self.defs.iter_mut() {
             let mut pseudo_map = HashMap::new();
             for inst in def.body.iter_mut() {
-                match &mut **inst {
+                match inst {
                     Instruction::Mov { src, dest } => {
                         replace_pseudo_operand!(self, src, pseudo_map);
                         replace_pseudo_operand!(self, dest, pseudo_map);
@@ -110,103 +109,81 @@ impl Program {
     fn alloc_stack_and_resolve_stack_ops(&mut self) {
         for def in self.defs.iter_mut() {
             if def.stack_size > 0 {
-                def.body.insert(
-                    0,
-                    WithDebugInfo::new(
-                        Instruction::AllocateStack(def.stack_size),
-                        DebugInfo {
-                            line: 0,
-                            description: "".to_string(),
-                        },
-                    ),
-                );
+                def.body
+                    .insert(0, Instruction::AllocateStack(def.stack_size));
             }
 
             let mut index = 0;
             while index < def.body.len() {
                 match def.body[index].clone() {
-                    WithDebugInfo {
-                        value:
-                            Instruction::Mov {
-                                src: Operand::Stack(src),
-                                dest: Operand::Stack(dest),
-                            },
-                        debug_info,
+                    Instruction::Mov {
+                        src: Operand::Stack(src),
+                        dest: Operand::Stack(dest),
                     } => {
                         replace_instruction!(def.body; [index] =>
-                            WithDebugInfo::new(Instruction::Mov {
+                            Instruction::Mov {
                                 src: Operand::Stack(src),
                                 dest: Operand::Reg(Register::R10),
-                            }, DebugInfo { line: debug_info.line, description: format!("({}) (stack mov {} -> {}) {} -> r10 (temp)", debug_info.description, src, dest, src) }),
-                            WithDebugInfo::new(Instruction::Mov {
+                            },
+                            Instruction::Mov {
                                 src: Operand::Reg(Register::R10),
                                 dest: Operand::Stack(dest),
-                            }, DebugInfo { line: debug_info.line, description: format!("({}) (stack mov {} -> {}) r10 -> {}", debug_info.description, src, dest, dest) })
+                            }
                         );
                     }
-                    WithDebugInfo {
-                        value: Instruction::Binary(op, Operand::Stack(val), Operand::Stack(src)),
-                        debug_info,
-                    } if REGULAR_BINARY_OPS.contains(&op) => {
+                    Instruction::Binary(op, Operand::Stack(val), Operand::Stack(src))
+                        if REGULAR_BINARY_OPS.contains(&op) =>
+                    {
                         // addq -m(%rbp), -n(%rbp)
                         // ---
                         // movq -m(%rbp), %r10
                         // addl %r10, -n(%rbp)
                         replace_instruction!(def.body; [index] =>
-                            WithDebugInfo::new(Instruction::Mov {
+                            Instruction::Mov {
                                 src: Operand::Stack(val),
                                 dest: Operand::Reg(Register::R10),
-                            }, DebugInfo{ line: debug_info.line, description: format!("({}) (stack binary {} {} {}) {} -> r10 (temp)", debug_info.description, src, op, val, val) }),
-                            WithDebugInfo::new(Instruction::Binary(
+                            },
+                            Instruction::Binary(
                                 op,
                                 Operand::Reg(Register::R10),
                                 Operand::Stack(src),
-                            ), DebugInfo { line: debug_info.line, description: format!("({}) (stack binary {} {} {}) r10 -> {}", debug_info.description, src, op, val, src) })
+                            )
                         );
                     }
-                    WithDebugInfo {
-                        value: Instruction::Binary(BinaryOp::Mul, rhs, lhs @ Operand::Stack(n)),
-                        debug_info,
-                    } => {
+                    Instruction::Binary(BinaryOp::Mul, rhs, lhs @ Operand::Stack(_)) => {
                         // imulq $3, -4(%rbp)
                         // ---
                         // movq -4(%rbp), %r11
                         // imulq $3, %r11
                         // movq %r11, -4(%rbp)
                         replace_instruction!(def.body; [index] =>
-                            WithDebugInfo::new(Instruction::Mov {
+                            Instruction::Mov {
                                 src: lhs.clone(),
                                 dest: Operand::Reg(Register::R11),
-                            }, DebugInfo{ line: debug_info.line, description: format!("({}) (mul on stack {}) {} -> r11", debug_info.description, n, n) }),
-                            WithDebugInfo::new(Instruction::Binary(BinaryOp::Mul, rhs, Operand::Reg(Register::R11)),  debug_info.clone()),
-                            WithDebugInfo::new(Instruction::Mov {
+                            },
+                            Instruction::Binary(BinaryOp::Mul, rhs, Operand::Reg(Register::R11)),
+                            Instruction::Mov {
                                 src: Operand::Reg(Register::R11),
                                 dest: lhs,
-                            }, DebugInfo{ line: debug_info.line, description: format!("({}) (mul on stack {}) r11 -> {}", debug_info.description, n, n) })
+                            }
                         );
                     }
-                    WithDebugInfo {
-                        value: Instruction::Cmp(op1 @ Operand::Stack(n1), op2 @ Operand::Stack(n2)),
-                        debug_info,
-                    } => {
+                    Instruction::Cmp(op1 @ Operand::Stack(_), op2 @ Operand::Stack(_)) => {
                         replace_instruction!(def.body; [index] =>
-                            WithDebugInfo::new(Instruction::Mov {
+                            Instruction::Mov {
                                 src: op1,
                                 dest: Operand::Reg(Register::R11),
-                            }, DebugInfo{ line: debug_info.line, description: format!("({}) (stack cmp {} {}) {} -> r11", debug_info.description, n1, n2, n1) }),
-                            WithDebugInfo::new(Instruction::Cmp(Operand::Reg(Register::R11), op2), DebugInfo{ line: debug_info.line, description: format!("({}) (stack cmp {} {})", debug_info.description, n1, n2) })
+                            },
+                            Instruction::Cmp(Operand::Reg(Register::R11), op2)
                         );
                     }
-                    WithDebugInfo {
-                        value: Instruction::Cmp(op1, op2 @ Operand::Imm(n)),
-                        debug_info,
-                    } => {
+                    Instruction::Cmp(op1, op2 @ Operand::Imm(_)) => {
                         replace_instruction!(def.body; [index] =>
-                            WithDebugInfo::new(Instruction::Mov {
+                            Instruction::Mov {
                                 src: op2,
                                 dest: Operand::Reg(Register::R11),
-                            }, DebugInfo{ line: debug_info.line, description: format!("({}) (cmp with imm) ${} -> r11", debug_info.description, n) }),
-                            WithDebugInfo::new(Instruction::Cmp(op1, Operand::Reg(Register::R11)), DebugInfo{ line: debug_info.line, description: format!("({}) (cmp with imm)", debug_info.description) })
+                            },
+                            Instruction::Cmp(op1, Operand::Reg(Register::R11))
                         );
                     }
                     _ => {}
@@ -229,7 +206,7 @@ impl From<&tacky::Program> for Program {
 #[derive(Debug)]
 pub struct FunctionDef {
     name: String,
-    body: Vec<WithDebugInfo<Instruction>>,
+    body: Vec<Instruction>,
     stack_size: i32,
 }
 
@@ -242,7 +219,7 @@ impl FunctionDef {
             indent(&["pushq\t%rbp", "movq\t%rsp, %rbp"]),
             self.body
                 .iter()
-                .map(|s| to_asm_string(s))
+                .map(|s| s.to_asm_string())
                 .collect::<Vec<String>>()
                 .join(&format!("\n{}", INDENT))
         )
@@ -353,221 +330,110 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    // fn to_asm_string(&self) -> String {
-    //     match self {
-    //         Instruction::AllocateStack(n) => format!("subq\t${}, %rsp", n),
-    //         Instruction::Mov { src, dest } => {
-    //             format!("movq\t{}, {}", src.to_asm_string(), dest.to_asm_string())
-    //         }
-    //         Instruction::Unary(op, operand) => {
-    //             format!("{}\t{}", unary_op_to_asm(op), operand.to_asm_string())
-    //         }
-    //         Instruction::Binary(op, val, src) => {
-    //             format!(
-    //                 "{:<4}\t{}, {}",
-    //                 binary_op_to_asm(op),
-    //                 val.to_asm_string(),
-    //                 src.to_asm_string()
-    //             )
-    //         }
-    //         Instruction::Cmp(lhs, rhs) => {
-    //             format!("cmpq\t{}, {}", lhs.to_asm_string(), rhs.to_asm_string())
-    //         }
-    //         Instruction::Label(label) => format!("{}:", label),
-    //         Instruction::Jmp(target) => format!("jmp\t\t{}", target),
-    //         Instruction::JmpCC(op, target) => format!("j{}\t{}", op, target),
-    //         Instruction::SetCC(op, dest) => format!("set{}\t{}", op, dest.to_asm_string()),
-    //         Instruction::Cqo => "cqo".to_string(),
-    //         Instruction::Idiv(operand) => format!("idivq\t{}", operand.to_asm_string()),
-    //         Instruction::Ret => indent(&["movq\t%rbp, %rsp", "popq\t%rbp", "ret"]),
-    //     }
-    // }
+    fn to_asm_string(&self) -> String {
+        match self {
+            Instruction::AllocateStack(n) => format!("subq\t${}, %rsp", n),
+            Instruction::Mov { src, dest } => {
+                format!("movq\t{}, {}", src.to_asm_string(), dest.to_asm_string())
+            }
+            Instruction::Unary(op, operand) => {
+                format!("{}\t{}", unary_op_to_asm(op), operand.to_asm_string())
+            }
+            Instruction::Binary(op, val, src) => {
+                format!(
+                    "{:<4}\t{}, {}",
+                    binary_op_to_asm(op),
+                    val.to_asm_string(),
+                    src.to_asm_string()
+                )
+            }
+            Instruction::Cmp(lhs, rhs) => {
+                format!("cmpq\t{}, {}", lhs.to_asm_string(), rhs.to_asm_string())
+            }
+            Instruction::Label(label) => format!("{}:", label),
+            Instruction::Jmp(target) => format!("jmp\t\t{}", target),
+            Instruction::JmpCC(op, target) => format!("j{}\t{}", op, target),
+            Instruction::SetCC(op, dest) => format!("set{}\t{}", op, dest.to_asm_string()),
+            Instruction::Cqo => "cqo".to_string(),
+            Instruction::Idiv(operand) => format!("idivq\t{}", operand.to_asm_string()),
+            Instruction::Ret => indent(&["movq\t%rbp, %rsp", "popq\t%rbp", "ret"]),
+        }
+    }
 
-    fn generate(
-        inst: &WithDebugInfo<tacky::Instruction>,
-        body: &mut Vec<WithDebugInfo<Instruction>>,
-    ) {
+    fn generate(inst: &tacky::Instruction, body: &mut Vec<Instruction>) {
         match inst {
-            WithDebugInfo {
-                value: tacky::Instruction::Return(val),
-                debug_info,
-            } => {
-                let value = Operand::from(val);
-                body.push(WithDebugInfo::new(
-                    Instruction::Mov {
-                        src: value,
-                        dest: Operand::Reg(Register::RAX),
-                    },
-                    DebugInfo {
-                        line: debug_info.line,
-                        description: format!(
-                            "({}) ret {}",
-                            debug_info.description,
-                            val.to_string()
-                        ),
-                    },
-                ));
-                body.push(WithDebugInfo::new(Instruction::Ret, debug_info.clone()));
+            tacky::Instruction::Return(value) => {
+                let value = Operand::from(value);
+                body.push(Instruction::Mov {
+                    src: value,
+                    dest: Operand::Reg(Register::RAX),
+                });
+                body.push(Instruction::Ret);
             }
-            WithDebugInfo {
-                value: tacky::Instruction::Copy { src, dst },
-                debug_info,
-            } => {
-                body.push(WithDebugInfo::new(
-                    Instruction::Mov {
-                        src: Operand::from(src),
-                        dest: Operand::from(dst),
-                    },
-                    DebugInfo {
-                        line: debug_info.line,
-                        description: format!(
-                            "({}) {} -> {}",
-                            debug_info.description,
-                            src.to_string(),
-                            dst.to_string()
-                        ),
-                    },
-                ));
+            tacky::Instruction::Copy { src, dst } => {
+                body.push(Instruction::Mov {
+                    src: Operand::from(src),
+                    dest: Operand::from(dst),
+                });
             }
-            WithDebugInfo {
-                value: tacky::Instruction::Unary(op, src_, dest_),
-                debug_info,
-            } => {
-                let src = Operand::from(src_);
-                let dest = Operand::from(dest_);
+            tacky::Instruction::Unary(op, src, dest) => {
+                let src = Operand::from(src);
+                let dest = Operand::from(dest);
                 match op {
                     UnaryOp::Not => {
                         body.extend_from_slice(&[
-                            WithDebugInfo::new(
-                                Instruction::Cmp(Operand::Imm(0), src),
-                                debug_info.map_description_ref(|d| {
-                                    format!("({}) unary ! {}", d, src_.to_string())
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: Operand::Imm(0),
-                                    dest: dest.clone(),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!("({}) unary ! {}", d, src_.to_string())
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::SetCC(CondCode::E, dest),
-                                debug_info.map_description_ref(|d| {
-                                    format!("({}) unary ! {}", d, src_.to_string())
-                                }),
-                            ),
+                            Instruction::Cmp(Operand::Imm(0), src),
+                            Instruction::Mov {
+                                src: Operand::Imm(0),
+                                dest: dest.clone(),
+                            },
+                            Instruction::SetCC(CondCode::E, dest),
                         ]);
                     }
                     _ => {
                         body.extend_from_slice(&[
-                            WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src,
-                                    dest: dest.clone(),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!("({}) unary {} {}", d, op, src_.to_string())
-                                }),
-                            ),
-                            WithDebugInfo::new(Instruction::Unary(*op, dest), debug_info.clone()),
+                            Instruction::Mov {
+                                src,
+                                dest: dest.clone(),
+                            },
+                            Instruction::Unary(*op, dest),
                         ]);
                     }
                 }
             }
-            WithDebugInfo {
-                value: tacky::Instruction::Binary(op, vlhs_, vrhs_, dest),
-                debug_info,
-            } => {
-                let vlhs = Operand::from(vlhs_);
-                let mut vrhs = Operand::from(vrhs_);
+            tacky::Instruction::Binary(op, vlhs, vrhs, dest) => {
+                let vlhs = Operand::from(vlhs);
+                let mut vrhs = Operand::from(vrhs);
                 let dest = Operand::from(dest);
                 match op {
                     BinaryOp::Mod | BinaryOp::Div => {
-                        let (result_reg, inst) = if let BinaryOp::Div = op {
-                            (Operand::Reg(Register::RAX), "div")
+                        let result_reg = if let BinaryOp::Div = op {
+                            Operand::Reg(Register::RAX)
                         } else {
-                            (Operand::Reg(Register::RDX), "mod")
+                            Operand::Reg(Register::RDX)
                         };
                         body.extend_from_slice(&[
-                            WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: vlhs,
-                                    dest: Operand::Reg(Register::RAX),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        inst,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::Cqo,
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
+                            Instruction::Mov {
+                                src: vlhs,
+                                dest: Operand::Reg(Register::RAX),
+                            },
+                            Instruction::Cqo,
                         ]);
 
                         if let Operand::Imm(_) = vrhs {
-                            body.push(WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: vrhs,
-                                    dest: Operand::Reg(Register::R10),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ));
+                            body.push(Instruction::Mov {
+                                src: vrhs,
+                                dest: Operand::Reg(Register::R10),
+                            });
                             vrhs = Operand::Reg(Register::R10);
                         }
 
                         body.extend_from_slice(&[
-                            WithDebugInfo::new(
-                                Instruction::Idiv(vrhs),
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: result_reg,
-                                    dest,
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
+                            Instruction::Idiv(vrhs),
+                            Instruction::Mov {
+                                src: result_reg,
+                                dest,
+                            },
                         ]);
                     }
                     BinaryOp::Eq
@@ -577,162 +443,48 @@ impl Instruction {
                     | BinaryOp::Greater
                     | BinaryOp::GreaterEq => {
                         body.extend_from_slice(&[
-                            WithDebugInfo::new(
-                                Instruction::Cmp(vrhs, vlhs),
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: Operand::Imm(0),
-                                    dest: dest.clone(),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
-                            WithDebugInfo::new(
-                                Instruction::SetCC(op.into(), dest),
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ),
+                            Instruction::Cmp(vrhs, vlhs),
+                            Instruction::Mov {
+                                src: Operand::Imm(0),
+                                dest: dest.clone(),
+                            },
+                            Instruction::SetCC(op.into(), dest),
                         ]);
                     }
                     _ => {
                         if vlhs != dest {
-                            body.push(WithDebugInfo::new(
-                                Instruction::Mov {
-                                    src: vlhs,
-                                    dest: dest.clone(),
-                                },
-                                debug_info.map_description_ref(|d| {
-                                    format!(
-                                        "({}) {} {} {}",
-                                        d,
-                                        op,
-                                        vlhs_.to_string(),
-                                        vrhs_.to_string()
-                                    )
-                                }),
-                            ));
+                            body.push(Instruction::Mov {
+                                src: vlhs,
+                                dest: dest.clone(),
+                            });
                         }
-                        body.push(WithDebugInfo::new(
-                            Instruction::Binary(*op, vrhs, dest),
-                            debug_info.map_description_ref(|d| {
-                                format!(
-                                    "({}) {} {} {}",
-                                    d,
-                                    op,
-                                    vlhs_.to_string(),
-                                    vrhs_.to_string()
-                                )
-                            }),
-                        ));
+                        body.push(Instruction::Binary(*op, vrhs, dest));
                     }
                 }
             }
-            WithDebugInfo {
-                value: tacky::Instruction::Jump(label),
-                debug_info,
-            } => {
-                body.push(WithDebugInfo::new(
-                    Instruction::Jmp(label.clone()),
-                    debug_info.clone(),
-                ));
+            tacky::Instruction::Jump(label) => {
+                body.push(Instruction::Jmp(label.clone()));
             }
 
-            WithDebugInfo {
-                value: tacky::Instruction::JumpIfZero(val, target),
-                debug_info,
-            } => {
+            tacky::Instruction::JumpIfZero(val, target) => {
                 let val = Operand::from(val);
                 body.extend_from_slice(&[
-                    WithDebugInfo::new(Instruction::Cmp(Operand::Imm(0), val), debug_info.clone()),
-                    WithDebugInfo::new(
-                        Instruction::JmpCC(CondCode::E, target.clone()),
-                        debug_info.clone(),
-                    ),
+                    Instruction::Cmp(Operand::Imm(0), val),
+                    Instruction::JmpCC(CondCode::E, target.clone()),
                 ]);
             }
 
-            WithDebugInfo {
-                value: tacky::Instruction::JumpIfNotZero(val, target),
-                debug_info,
-            } => {
+            tacky::Instruction::JumpIfNotZero(val, target) => {
                 let val = Operand::from(val);
                 body.extend_from_slice(&[
-                    WithDebugInfo::new(Instruction::Cmp(Operand::Imm(0), val), debug_info.clone()),
-                    WithDebugInfo::new(
-                        Instruction::JmpCC(CondCode::NE, target.clone()),
-                        debug_info.clone(),
-                    ),
+                    Instruction::Cmp(Operand::Imm(0), val),
+                    Instruction::JmpCC(CondCode::NE, target.clone()),
                 ]);
             }
 
-            WithDebugInfo {
-                value: tacky::Instruction::Label(label),
-                debug_info,
-            } => body.push(WithDebugInfo::new(
-                Instruction::Label(label.clone()),
-                debug_info.clone(),
-            )),
+            tacky::Instruction::Label(label) => body.push(Instruction::Label(label.clone())),
         }
     }
-}
-
-fn to_asm_string(inst: &WithDebugInfo<Instruction>) -> String {
-    let comment = format!(
-        "# line {} :: {}",
-        inst.debug_info.line, inst.debug_info.description
-    );
-    let asm = match &inst.value {
-        Instruction::AllocateStack(n) => format!("subq\t${}, %rsp", n),
-        Instruction::Mov { src, dest } => {
-            format!("movq\t{}, {}", src.to_asm_string(), dest.to_asm_string())
-        }
-        Instruction::Unary(op, operand) => {
-            format!("{}\t{}", unary_op_to_asm(op), operand.to_asm_string())
-        }
-        Instruction::Binary(op, val, src) => {
-            format!(
-                "{:<4}\t{}, {}",
-                binary_op_to_asm(op),
-                val.to_asm_string(),
-                src.to_asm_string()
-            )
-        }
-        Instruction::Cmp(lhs, rhs) => {
-            format!("cmpq\t{}, {}", lhs.to_asm_string(), rhs.to_asm_string())
-        }
-        Instruction::Label(label) => format!("{}:", label),
-        Instruction::Jmp(target) => format!("jmp\t\t{}", target),
-        Instruction::JmpCC(op, target) => format!("j{}\t{}", op, target),
-        Instruction::SetCC(op, dest) => format!("set{}\t{}", op, dest.to_asm_string()),
-        Instruction::Cqo => "cqo".to_string(),
-        Instruction::Idiv(operand) => format!("idivq\t{}", operand.to_asm_string()),
-        Instruction::Ret => indent(&["movq\t%rbp, %rsp", "popq\t%rbp", "ret"]),
-    };
-    format!("{}\t{}", asm, comment)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

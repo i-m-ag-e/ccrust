@@ -40,8 +40,6 @@ pub struct Conditional {
     pub cond: Box<Expr>,
     pub then_expr: Box<Expr>,
     pub else_expr: Box<Expr>,
-    pub qmark: Token,
-    pub colon: Token,
 }
 
 #[derive(Debug, Clone, Copy)]
