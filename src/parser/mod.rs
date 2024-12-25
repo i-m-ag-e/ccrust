@@ -4,6 +4,7 @@ pub mod pretty_print_ast;
 mod stmt;
 
 use crate::lexer::token::{self, Span, Token, TokenType};
+use crate::lexer::LexerError;
 use ast::*;
 use multipeek::{multipeek, MultiPeek};
 use thiserror::Error;
@@ -58,6 +59,18 @@ pub enum ParseErrorType {
         decl_type: &'static str,
         context: &'static str,
     },
+
+    #[error("syntax error: {0:?}")]
+    LexerError(LexerError),
+}
+
+impl From<LexerError> for ParseError {
+    fn from(err: LexerError) -> Self {
+        ParseError {
+            token: err.token.clone(),
+            error: ParseErrorType::LexerError(err),
+        }
+    }
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -601,3 +614,6 @@ fn binary_tt_to_op(tt: &TokenType) -> BinaryOp {
         _ => unreachable!(),
     }
 }
+
+#[cfg(test)]
+mod test;

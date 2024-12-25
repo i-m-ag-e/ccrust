@@ -216,8 +216,9 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_octal(&mut self, one_byte: bool) -> Result<u32, LexerError> {
+    fn read_octal(&mut self, begin: char, one_byte: bool) -> Result<u32, LexerError> {
         let mut counter = 1;
+        let mut octal_str = begin.to_string();
         loop {
             if one_byte && counter == 3 {
                 break;
@@ -225,18 +226,17 @@ impl<'a> Lexer<'a> {
 
             match self.peek() {
                 Some('0'..='7') => {
-                    self.advance();
+                    octal_str.push(self.advance().unwrap());
                     counter += 1;
                 }
                 _ => break,
             };
         }
 
-        let lexeme = self.get_lexeme();
-        u32::from_str_radix(&lexeme[2..], 8).map_err(|e| {
+        u32::from_str_radix(&octal_str, 8).map_err(|e| {
             self.make_error(LexerErrorType::InvalidOctalLiteral {
                 context: "in string",
-                error: format!("{:?}", e),
+                error: format!(" (`{}`) {:?}", octal_str, e),
             })
         })
     }
@@ -251,7 +251,7 @@ impl<'a> Lexer<'a> {
                 '\\' => Ok('\\'),
                 '"' => Ok('"'),
                 '\'' => Ok('\''),
-                '0'..='7' => self.read_octal(true).map(|n| n as u8 as char),
+                '0'..='7' => self.read_octal(c, true).map(|n| n as u8 as char),
                 _ => Err(self.make_error(LexerErrorType::InvalidEscape(c))),
             }
         } else {
@@ -381,3 +381,6 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod test;
