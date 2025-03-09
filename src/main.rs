@@ -1,11 +1,11 @@
+use ccrust::assemble;
+use ccrust::compile;
+use ccrust::lexer::LexerError;
+use ccrust::parser::ParseError;
+#[cfg(feature = "resolve")]
+use ccrust::resolver::ResolveError;
 use clap::Parser;
 use colored::Colorize;
-use rustcc::assemble;
-use rustcc::compile;
-use rustcc::lexer::LexerError;
-use rustcc::parser::ParseError;
-#[cfg(feature = "resolve")]
-use rustcc::resolver::ResolveError;
 use std::fs;
 use std::path::Path;
 
