@@ -8,6 +8,7 @@ use super::ast::WithToken;
 pub enum Expr {
     Assign(Assign),
     Binary(Binary),
+    Comma(Comma),
     Conditional(Conditional),
     Literal(WithToken<Literal>),
     Unary(Unary),
@@ -27,6 +28,9 @@ pub struct Binary {
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
 }
+
+#[derive(Debug, Clone)]
+pub struct Comma(pub Box<Expr>, pub Box<Expr>);
 
 #[derive(Debug, Clone)]
 pub struct Unary {
@@ -120,16 +124,21 @@ impl Display for BinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Literal {
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub enum Integral {
     Integer(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Literal {
+    Integral(Integral),
     Float(f64),
 }
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Integer(i) => write!(f, "{}", i),
+            Literal::Integral(Integral::Integer(i)) => write!(f, "{}", i),
             Literal::Float(fl) => write!(f, "{}", fl),
         }
     }
@@ -138,6 +147,7 @@ impl Display for Literal {
 pub trait ExprRefVisitor<R> {
     fn visit_assign(&mut self, expr: &Assign) -> R;
     fn visit_binary(&mut self, expr: &Binary) -> R;
+    fn visit_comma(&mut self, expr: &Comma) -> R;
     fn visit_conditional(&mut self, expr: &Conditional) -> R;
     fn visit_literal(&mut self, literal: &WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: &Unary) -> R;
@@ -147,6 +157,7 @@ pub trait ExprRefVisitor<R> {
 pub trait ExprVisitor<R> {
     fn visit_assign(&mut self, expr: Assign) -> R;
     fn visit_binary(&mut self, expr: Binary) -> R;
+    fn visit_comma(&mut self, expr: Comma) -> R;
     fn visit_conditional(&mut self, expr: Conditional) -> R;
     fn visit_literal(&mut self, literal: WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: Unary) -> R;

@@ -404,7 +404,7 @@ impl Instruction {
                     info
                 )
             }
-            Instruction::Label(label, info) => format!("{}:\t# {}", label, info),
+            Instruction::Label(label, info) => format!("\n{}:\t# {}", label, info),
             Instruction::Jmp(target, info) => format!("jmp\t\t{}\t# {}", target, info),
             Instruction::JmpCC(op, target, info) => format!("j{}\t{}\t# {}", op, target, info),
             Instruction::SetCC(op, dest, info) => {
@@ -590,7 +590,9 @@ impl From<&tacky::Value> for Operand {
     fn from(value: &tacky::Value) -> Self {
         match value {
             tacky::Value::Literal(lit) => match lit {
-                ast::Literal::Integer(i) => Operand::Imm(*i),
+                ast::Literal::Integral(i) => match i {
+                    ast::Integral::Integer(i) => Operand::Imm(*i),
+                },
                 ast::Literal::Float(_) => unimplemented!(),
             },
             tacky::Value::Var(var) => Operand::PseudoReg(var.clone()),

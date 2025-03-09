@@ -5,14 +5,22 @@ use crate::parser::ast::*;
 use scoped_var_map::ScopedVarMap;
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("ResolveError at {token:?}: {error_type}")]
 pub struct ResolveError {
     pub token: Token,
+    #[source]
     pub error_type: ResolverErrorType,
 }
 
 #[derive(Error, Debug)]
 pub enum ResolverErrorType {
+    #[error("'break' used outside a loop")]
+    BreakOutsideLoop,
+
+    #[error("'continue' used outside a loop")]
+    ContinueOutsideLoop,
+
     #[error("Duplicate variable in scope (previous declaration on {prev_token:?}")]
     DuplicateVariable { prev_token: Token },
 
@@ -29,6 +37,10 @@ pub type MapEntry = WithToken<String>;
 pub struct Resolver {
     scope: ScopedVarMap,
     scope_depth: i32,
+    loop_count: i32,
+    switch_count: i32,
+    loop_id_stack: Vec<i32>,
+    switch_id_stack: Vec<i32>,
 }
 
 impl Resolver {
@@ -36,11 +48,37 @@ impl Resolver {
         Resolver {
             scope: ScopedVarMap::new(),
             scope_depth: 0,
+            loop_count: 0,
+            loop_id_stack: Vec::new(),
+            switch_count: 0,
+            switch_id_stack: Vec::new(),
         }
+    }
+
+    fn begin_scope(&mut self) {
+        self.scope.insert_scope();
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.scope.unwind();
+        self.scope_depth -= 1;
     }
 
     fn make_unique(&self, name: &String) -> String {
         format!("{}.{}", name, self.scope_depth)
+    }
+
+    fn new_loop(&mut self) -> i32 {
+        self.loop_count += 1;
+        self.loop_id_stack.push(self.loop_count);
+        self.loop_count
+    }
+
+    fn new_switch(&mut self) -> i32 {
+        self.switch_count += 1;
+        self.switch_id_stack.push(self.switch_count);
+        self.switch_count
     }
 }
 
@@ -68,6 +106,13 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
             lhs: Box::new(self.visit_expr(*expr.lhs)?),
             rhs: Box::new(self.visit_expr(*expr.rhs)?),
         }))
+    }
+
+    fn visit_comma(&mut self, expr: Comma) -> ResolveResult<Expr> {
+        Ok(Expr::Comma(Comma(
+            Box::new(self.visit_expr(*expr.0)?),
+            Box::new(self.visit_expr(*expr.1)?),
+        )))
     }
 
     fn visit_conditional(&mut self, expr: Conditional) -> ResolveResult<Expr> {
@@ -105,25 +150,107 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
 }
 
 impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
-    fn visit_compound(&mut self, block: Block) -> ResolveResult<Stmt> {
-        self.scope.insert_scope();
-        self.scope_depth += 1;
+    fn visit_break(&mut self, break_stmt: BreakStmt) -> ResolveResult<Stmt> {
+        match self.loop_id_stack.last() {
+            Some(loop_id) => Ok(Stmt::Break(BreakStmt {
+                loop_or_switch: true,
+                id: break_stmt.id.map(|_| *loop_id),
+            })),
+            _ => match self.switch_id_stack.last() {
+                Some(switch_id) => Ok(Stmt::Break(BreakStmt {
+                    loop_or_switch: false,
+                    id: break_stmt.id.map(|_| *switch_id),
+                })),
+                _ => Err(ResolveError {
+                    token: break_stmt.id.1,
+                    error_type: ResolverErrorType::BreakOutsideLoop,
+                }),
+            },
+        }
+    }
+
+    fn visit_continue(&mut self, continue_stmt: WithToken<i32>) -> ResolveResult<Stmt> {
+        match self.loop_id_stack.last() {
+            Some(loop_id) => Ok(Stmt::Continue(WithToken(*loop_id, continue_stmt.1))),
+            _ => Err(ResolveError {
+                token: continue_stmt.1,
+                error_type: ResolverErrorType::ContinueOutsideLoop,
+            }),
+        }
+    }
+
+    fn visit_compound(&mut self, stmt: CompoundStmt) -> ResolveResult<Stmt> {
+        if stmt.introduce_scope {
+            self.begin_scope();
+        }
 
         let block = Block(
-            block
+            stmt.block
                 .0
                 .into_iter()
                 .map(|b| self.visit_block_item(b))
                 .collect::<ResolveResult<_>>()?,
         );
 
-        self.scope_depth -= 1;
-        self.scope.unwind();
-        Ok(Stmt::Compound(block))
+        if stmt.introduce_scope {
+            self.end_scope();
+        }
+        Ok(Stmt::Compound(CompoundStmt {
+            introduce_scope: stmt.introduce_scope,
+            block,
+        }))
     }
 
     fn visit_expression(&mut self, expr: Expr) -> ResolveResult<Stmt> {
         Ok(Stmt::Expression(self.visit_expr(expr)?))
+    }
+
+    // loop id in loops
+
+    fn visit_for(&mut self, for_stmt: ForStmt) -> ResolveResult<Stmt> {
+        self.scope.insert_scope();
+        self.scope_depth += 1;
+        let loop_id = self.new_loop();
+
+        let init_token = for_stmt.initializer.1;
+        let initializer = for_stmt
+            .initializer
+            .0
+            .map(|init| match init {
+                ForStmtInitializer::Expr(expr) => {
+                    Ok(ForStmtInitializer::Expr(self.visit_expr(expr)?))
+                }
+                ForStmtInitializer::VarDecl(decls) => Ok(ForStmtInitializer::VarDecl(
+                    decls
+                        .into_iter()
+                        .map(|decl| self.visit_var_decl(decl))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+            })
+            .transpose()?;
+
+        let condition = for_stmt
+            .condition
+            .map_inner(|c| self.visit_expr(c))
+            .raise_result()?;
+        let step = for_stmt
+            .step
+            .map_inner(|s| self.visit_expr(s))
+            .raise_result()?;
+        let body = Box::new(self.visit_stmt(*for_stmt.body)?);
+
+        let resolved_for = ForStmt {
+            loop_id,
+            initializer: WithToken(initializer, init_token),
+            condition,
+            step,
+            body,
+        };
+
+        self.loop_id_stack.pop();
+        self.scope.unwind();
+        self.scope_depth -= 1;
+        Ok(Stmt::For(resolved_for))
     }
 
     fn visit_goto(&mut self, label: WithToken<String>) -> ResolveResult<Stmt> {
@@ -157,6 +284,61 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
             ret_value: WithToken(self.visit_expr(ret_value.0)?, ret_value.1),
         })
     }
+
+    fn visit_switch(&mut self, switch_stmt: SwitchStmt) -> ResolveResult<Stmt> {
+        self.begin_scope();
+
+        let switch_id = self.new_switch();
+        let SwitchStmt {
+            switch_id: _,
+            cond,
+            cases,
+            default,
+        } = switch_stmt;
+
+        let cond = cond.map(|c| Ok(self.visit_expr(c)?)).transpose()?;
+        let cases = cases
+            .into_iter()
+            .map(|case| {
+                case.map(|case| {
+                    let Stmt::Compound(stmt) = self.visit_compound(case.stmt)? else {
+                        unreachable!()
+                    };
+                    Ok(Case {
+                        value: case.value,
+                        stmt,
+                    })
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let Stmt::Compound(default) = self.visit_compound(default)? else {
+            unreachable!()
+        };
+
+        self.switch_id_stack.pop();
+        self.end_scope();
+
+        Ok(Stmt::Switch(SwitchStmt {
+            switch_id,
+            cond,
+            cases,
+            default,
+        }))
+    }
+
+    fn visit_while(&mut self, while_stmt: WhileStmt) -> ResolveResult<Stmt> {
+        let loop_id = self.new_loop();
+        let stmt = Ok(Stmt::While(WhileStmt {
+            loop_id,
+            cond: while_stmt.cond.map(|c| self.visit_expr(c)).transpose()?,
+            body: Box::new(self.visit_stmt(*while_stmt.body)?),
+            do_while: while_stmt.do_while,
+        }));
+        self.loop_id_stack.pop();
+        stmt
+    }
 }
 
 impl ASTVisitor for Resolver {
@@ -170,7 +352,12 @@ impl ASTVisitor for Resolver {
     fn visit_block_item(&mut self, block_item: BlockItem) -> Self::BlockItemResult {
         Ok(match block_item {
             BlockItem::Stmt(stmt) => BlockItem::Stmt(self.visit_stmt(stmt)?),
-            BlockItem::VarDecl(decl) => BlockItem::VarDecl(self.visit_var_decl(decl)?),
+            BlockItem::VarDecl(decls) => BlockItem::VarDecl(
+                decls
+                    .into_iter()
+                    .map(|decl| self.visit_var_decl(decl))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
         })
     }
 
