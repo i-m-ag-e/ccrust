@@ -3,4 +3,5 @@ Cargo.lock
 grammar.ebnf
 run_compiled_executable.py
 /files
-tests/files/output
+tests/files/output/*
+!tests/files/output/.gitkeep
