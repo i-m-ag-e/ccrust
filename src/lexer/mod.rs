@@ -47,12 +47,18 @@ macro_rules! multi_char_tok {
 
 lazy_static! {
     static ref KEYWORDS: HashMap<&'static str, TokenType> = hash_map! {
+        "break" => TokenType::KBreak,
+        "case" => TokenType::KCase,
+        "continue" => TokenType::KContinue,
+        "default" => TokenType::KDefault,
+        "do" => TokenType::KDo,
         "else"   => TokenType::KElse,
         "for"    => TokenType::KFor,
         "goto"   => TokenType::KGoto,
         "if"     => TokenType::KIf,
         "int"    => TokenType::KInt,
         "return" => TokenType::KReturn,
+        "switch" => TokenType::KSwitch,
         "while"  => TokenType::KWhile,
     };
 }
@@ -88,9 +94,11 @@ pub enum LexerErrorType {
 
 pub type LexerResult = Result<Token, LexerError>;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("{}:{} at ({:?})\t::\t{}", token.line, lexeme, token.span, error)]
 pub struct LexerError {
     pub token: Token,
+    pub lexeme: String,
     pub error: LexerErrorType,
 }
 
@@ -149,8 +157,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn make_error(&self, error: LexerErrorType) -> LexerError {
+        let lexeme = self.get_lexeme().to_string();
         LexerError {
             token: self.make_token(TokenType::Error),
+            lexeme,
             error,
         }
     }
@@ -316,6 +326,8 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn next_token(&mut self) -> LexerResult {
+        assert!(!self.eof);
+
         self.skip_whitespace();
 
         self.start = self.current;
@@ -378,6 +390,18 @@ impl<'a> Lexer<'a> {
             c if c.is_ascii_digit() => self.number(),
             c if c == '_' || c.is_ascii_alphabetic() => self.identifier(),
             _ => Err(self.make_error(LexerErrorType::UnexpectedChar(c))),
+        }
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = LexerResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.eof {
+            None
+        } else {
+            Some(self.next_token())
         }
     }
 }

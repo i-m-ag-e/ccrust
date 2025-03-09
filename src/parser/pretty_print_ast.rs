@@ -67,6 +67,20 @@ impl ExprRefVisitor<String> for PrettyPrint {
         expr_str
     }
 
+    fn visit_comma(&mut self, expr: &Comma) -> String {
+        self.indent += 1;
+        let expr_str = format!(
+            "{0}(\"{}\",\n{3}{1},\n{3}{2}\n{4})",
+            "COMMA".cyan().bold(),
+            self.visit_expr(&expr.0),
+            self.visit_expr(&expr.1),
+            Self::INDENT.repeat(self.indent),
+            Self::INDENT.repeat(self.indent - 1)
+        );
+        self.indent -= 1;
+        expr_str
+    }
+
     fn visit_conditional(&mut self, expr: &Conditional) -> String {
         self.indent += 1;
 
@@ -94,7 +108,9 @@ impl ExprRefVisitor<String> for PrettyPrint {
     fn visit_literal(&mut self, literal: &WithToken<Literal>) -> String {
         match &literal.0 {
             Literal::Float(f) => format!("{}({})", "FLOAT".green(), f.to_string().magenta()),
-            Literal::Integer(i) => format!("{}({})", "INT".green(), i.to_string().magenta()),
+            Literal::Integral(Integral::Integer(i)) => {
+                format!("{}({})", "INT".green(), i.to_string().magenta())
+            }
         }
     }
 
@@ -124,14 +140,32 @@ impl ExprRefVisitor<String> for PrettyPrint {
 }
 
 impl StmtRefVisitor<String> for PrettyPrint {
-    fn visit_compound(&mut self, block: &Block) -> String {
+    fn visit_break(&mut self, break_stmt: &BreakStmt) -> String {
+        format!(
+            "{0}{1}({2} {3})",
+            self.indent_inside(),
+            "BREAK".red(),
+            if break_stmt.loop_or_switch {
+                "LOOP".yellow()
+            } else {
+                "SWITCH".yellow()
+            },
+            *break_stmt.id
+        )
+    }
+
+    fn visit_continue(&mut self, id: &WithToken<i32>) -> String {
+        format!("{0}{1}({2})", self.indent_inside(), "CONTINUE".red(), **id)
+    }
+
+    fn visit_compound(&mut self, stmt: &CompoundStmt) -> String {
         self.indent += 1;
         let block_str = format!(
             "{0}{1}\n{3}\n{0}{2}",
             self.indent_now(),
             "{".yellow().bold(),
             "}".yellow().bold(),
-            block
+            stmt.block
                 .0
                 .iter()
                 .map(|item| self.visit_block_item(item))
@@ -152,6 +186,47 @@ impl StmtRefVisitor<String> for PrettyPrint {
         );
         self.indent -= 1;
         expr_str
+    }
+
+    fn visit_for(&mut self, for_stmt: &ForStmt) -> String {
+        self.indent += 1;
+
+        let initializer_str = match &*for_stmt.initializer {
+            Some(ForStmtInitializer::Expr(expr)) => self.visit_expr(expr),
+            Some(ForStmtInitializer::VarDecl(decls)) => decls
+                .iter()
+                .map(|decl| self.visit_var_decl(decl))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => "".to_string(),
+        };
+
+        let condition_str = if let Some(cond) = &*for_stmt.condition {
+            self.visit_expr(cond)
+        } else {
+            "".to_string()
+        };
+
+        let step_str = if let Some(step) = &*for_stmt.step {
+            self.visit_expr(step)
+        } else {
+            "".to_string()
+        };
+
+        let for_str = format!(
+            "{0}{1}({7}) (\n{0}  {2}{6}\n{0}  {3}{6}\n{0}  {4}\n{0})\n{5}",
+            self.indent_now(),                // 0
+            "FOR".red(),                      // 1
+            initializer_str,                  // 2
+            condition_str,                    // 3
+            step_str,                         // 4
+            self.visit_stmt(&*for_stmt.body), // 5
+            ";".yellow(),                     // 6
+            for_stmt.loop_id                  // 7
+        );
+
+        self.indent -= 1;
+        for_str
     }
 
     fn visit_goto(&mut self, label: &WithToken<String>) -> String {
@@ -215,6 +290,50 @@ impl StmtRefVisitor<String> for PrettyPrint {
         self.indent -= 1;
         ret_str
     }
+
+    fn visit_switch(&mut self, switch_stmt: &SwitchStmt) -> String {
+        self.indent += 1;
+        let switch_str = format!(
+            "{0}{1}\n{2}\n{0}{3}:{4}",
+            self.indent_now(),
+            "SWITCH".red(),
+            switch_stmt
+                .cases
+                .iter()
+                .map(|case| format!(
+                    "{}{} {:?}:\n{}",
+                    self.indent_inside(),
+                    "CASE".red(),
+                    *case.value,
+                    self.visit_compound(&case.stmt)
+                ))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "DEFAULT".yellow(),
+            self.visit_compound(&switch_stmt.default)
+        );
+        self.indent -= 1;
+        switch_str
+    }
+
+    fn visit_while(&mut self, while_stmt: &WhileStmt) -> String {
+        self.indent += 1;
+        let while_str = format!(
+            "{0}{4}{1}({5})\x0b{2}\n{0} \n{3}",
+            self.indent_now(),
+            "WHILE".red(),
+            self.visit_expr(&while_stmt.cond),
+            self.visit_stmt(&*while_stmt.body),
+            if while_stmt.do_while {
+                "DO ".red().to_string()
+            } else {
+                "".to_string()
+            },
+            while_stmt.loop_id
+        );
+        self.indent -= 1;
+        while_str
+    }
 }
 
 impl ASTRefVisitor for PrettyPrint {
@@ -237,7 +356,11 @@ impl ASTRefVisitor for PrettyPrint {
     fn visit_block_item(&mut self, block_item: &BlockItem) -> Self::BlockItemResult {
         match block_item {
             BlockItem::Stmt(stmt) => self.visit_stmt(stmt),
-            BlockItem::VarDecl(decl) => self.visit_var_decl(decl),
+            BlockItem::VarDecl(decls) => decls
+                .iter()
+                .map(|decl| self.visit_var_decl(decl))
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 
@@ -245,6 +368,7 @@ impl ASTRefVisitor for PrettyPrint {
         self.indent += 1;
         let body_str = function_def
             .body
+            .block
             .0
             .iter()
             .map(|item| self.visit_block_item(item))

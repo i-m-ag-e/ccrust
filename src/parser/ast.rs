@@ -25,12 +25,26 @@ impl<T> WithToken<T> {
 }
 
 impl<T, E> WithToken<Result<T, E>> {
+    pub fn map_inner<U>(self, f: impl FnOnce(T) -> U) -> WithToken<Result<U, E>> {
+        self.map(|res| res.map(f))
+    }
+
     pub fn transpose(self) -> Result<WithToken<T>, E> {
         self.0.map(|t| WithToken(t, self.1))
     }
 }
 
+impl<T, E> WithToken<Option<Result<T, E>>> {
+    pub fn raise_result(self) -> Result<WithToken<Option<T>>, E> {
+        self.map(|op| op.transpose()).transpose()
+    }
+}
+
 impl<T> WithToken<Option<T>> {
+    pub fn map_inner<U>(self, f: impl FnOnce(T) -> U) -> WithToken<Option<U>> {
+        self.map(|res| res.map(f))
+    }
+
     pub fn transpose(self) -> Option<WithToken<T>> {
         self.0.map(|t| WithToken(t, self.1))
     }
@@ -55,13 +69,13 @@ pub struct Program(pub Vec<FunctionDef>);
 #[derive(Debug)]
 pub struct FunctionDef {
     pub name: WithToken<String>,
-    pub body: Block,
+    pub body: CompoundStmt,
 }
 
 #[derive(Debug)]
 pub enum BlockItem {
     Stmt(Stmt),
-    VarDecl(VarDecl),
+    VarDecl(Vec<VarDecl>),
 }
 
 #[derive(Debug)]
@@ -89,13 +103,18 @@ pub trait ASTRefVisitor:
 
     fn visit_stmt(&mut self, stmt: &Stmt) -> Self::StmtResult {
         match stmt {
+            Stmt::Break(wt) => self.visit_break(wt),
+            Stmt::Continue(wt) => self.visit_continue(wt),
             Stmt::Compound(block) => self.visit_compound(block),
             Stmt::Expression(expr) => self.visit_expression(expr),
+            Stmt::For(for_stmt) => self.visit_for(for_stmt),
             Stmt::Goto(label) => self.visit_goto(label),
             Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::Label(label) => self.visit_label(label),
             Stmt::Null => self.visit_null(),
             Stmt::Return { ret_value } => self.visit_return(ret_value),
+            Stmt::Switch(switch_stmt) => self.visit_switch(switch_stmt),
+            Stmt::While(while_stmt) => self.visit_while(while_stmt),
         }
     }
 
@@ -103,6 +122,7 @@ pub trait ASTRefVisitor:
         match expr {
             Expr::Assign(assign) => self.visit_assign(assign),
             Expr::Binary(binary) => self.visit_binary(binary),
+            Expr::Comma(comma) => self.visit_comma(comma),
             Expr::Conditional(cond) => self.visit_conditional(cond),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),
@@ -128,13 +148,18 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
 
     fn visit_stmt(&mut self, stmt: Stmt) -> Self::StmtResult {
         match stmt {
+            Stmt::Break(wt) => self.visit_break(wt),
+            Stmt::Continue(wt) => self.visit_continue(wt),
             Stmt::Compound(block) => self.visit_compound(block),
             Stmt::Expression(expr) => self.visit_expression(expr),
+            Stmt::For(for_stmt) => self.visit_for(for_stmt),
             Stmt::Goto(label) => self.visit_goto(label),
             Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::Label(label) => self.visit_label(label),
             Stmt::Null => self.visit_null(),
             Stmt::Return { ret_value } => self.visit_return(ret_value),
+            Stmt::Switch(switch_stmt) => self.visit_switch(switch_stmt),
+            Stmt::While(while_stmt) => self.visit_while(while_stmt),
         }
     }
 
@@ -142,6 +167,7 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
         match expr {
             Expr::Assign(assign) => self.visit_assign(assign),
             Expr::Binary(binary) => self.visit_binary(binary),
+            Expr::Comma(comma) => self.visit_comma(comma),
             Expr::Conditional(cond) => self.visit_conditional(cond),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),

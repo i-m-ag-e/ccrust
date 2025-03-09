@@ -3,8 +3,8 @@ use std::fmt::Display;
 use crate::{
     debug_info::DebugInfo,
     parser::ast::{
-        self, ASTRefVisitor, BinaryOp, BlockItem, ExprRefVisitor, Literal, StmtRefVisitor,
-        WithToken,
+        self, ASTRefVisitor, BinaryOp, BlockItem, BreakStmt, ExprRefVisitor, ForStmtInitializer,
+        Integral, Literal, StmtRefVisitor, WithToken,
     },
 };
 
@@ -103,6 +103,14 @@ impl GenerateTacky {
         self.label_counter += 1;
         format!("l.{}.{}", desc, self.label_counter - 1)
     }
+
+    fn loop_label(loop_id: i32, prefix: &str) -> String {
+        format!("{prefix}loop.{loop_id}")
+    }
+
+    fn switch_label(switch_id: i32, prefix: &str) -> String {
+        format!("{prefix}switch.{switch_id}")
+    }
 }
 
 impl ExprRefVisitor<Value> for GenerateTacky {
@@ -151,7 +159,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                     Instruction::JumpIfZero(vrhs, false_label.clone(), debug_info)
                         => format!("(&&) when rhs `{}` also -> 0", vrhs),
                     Instruction::Copy {
-                        src: Value::Literal(Literal::Integer(1)),
+                        src: Value::Literal(Literal::Integral(Integral::Integer(1))),
                         dst: dst.clone(),
                         debug_info
                     } => format!("(&&) (both true) `{}` (result) = 1", dst),
@@ -159,7 +167,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                         => format!("(&&) (both true) jump to end"),
                     Instruction::Label(false_label, debug_info) => "".to_string(),
                     Instruction::Copy {
-                        src: Value::Literal(Literal::Integer(0)),
+                        src: Value::Literal(Literal::Integral(Integral::Integer(0))),
                         dst: dst.clone(),
                         debug_info
                     } => format!("(&&) (false) `{}` (result) = 0", dst),
@@ -185,7 +193,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                     Instruction::JumpIfNotZero(vrhs, true_label.clone(), debug_info)
                         => format!("(||) when rhs `{}` is true", vrhs),
                     Instruction::Copy {
-                        src: Value::Literal(Literal::Integer(0)),
+                        src: Value::Literal(Literal::Integral(Integral::Integer(0))),
                         dst: dst.clone(),
                         debug_info
                     } => format!("(||) (both false) `{}` (result) = 0", dst),
@@ -194,7 +202,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
 
                     Instruction::Label(true_label, debug_info) => "".to_string(),
                     Instruction::Copy {
-                        src: Value::Literal(Literal::Integer(1)),
+                        src: Value::Literal(Literal::Integral(Integral::Integer(1))),
                         dst: dst.clone(),
                         debug_info
                     } => format!("(||) (true) `{}` (result) = 1", dst),
@@ -218,6 +226,12 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                 dst
             }
         }
+    }
+
+    fn visit_comma(&mut self, expr: &ast::Comma) -> Value {
+        let ast::Comma(lhs, rhs) = expr;
+        let _ = self.visit_expr(lhs);
+        self.visit_expr(rhs)
     }
 
     fn visit_conditional(&mut self, expr: &ast::Conditional) -> Value {
@@ -282,7 +296,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                         Instruction::Binary(
                             BinaryOp::Plus,
                             expr_value.clone(),
-                            Value::Literal(Literal::Integer(1)),
+                            Value::Literal(Literal::Integral(Integral::Integer(1))),
                             expr_value,
                             debug_info
                         ) => format!("(p++) {} += 1", expr_value)
@@ -296,7 +310,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                         Instruction::Binary(
                             BinaryOp::Plus,
                             expr_value.clone(),
-                            Value::Literal(Literal::Integer(1)),
+                            Value::Literal(Literal::Integral(Integral::Integer(1))),
                             expr_value.clone(),
                             debug_info
                         ) => format!("(++) {} += 1", expr_value),
@@ -323,7 +337,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                         Instruction::Binary(
                             BinaryOp::Minus,
                             expr_value.clone(),
-                            Value::Literal(Literal::Integer(1)),
+                            Value::Literal(Literal::Integral(Integral::Integer(1))),
                             expr_value,
                             debug_info
                         ) => format!("(p--) {} -= 1", expr_value)
@@ -337,7 +351,7 @@ impl ExprRefVisitor<Value> for GenerateTacky {
                         Instruction::Binary(
                             BinaryOp::Minus,
                             expr_value.clone(),
-                            Value::Literal(Literal::Integer(1)),
+                            Value::Literal(Literal::Integral(Integral::Integer(1))),
                             expr_value.clone(),
                             debug_info
                         ) => format!("(--) {} -= 1", expr_value),
@@ -368,12 +382,77 @@ impl ExprRefVisitor<Value> for GenerateTacky {
 }
 
 impl StmtRefVisitor<()> for GenerateTacky {
-    fn visit_compound(&mut self, block: &ast::Block) -> () {
-        block.0.iter().for_each(|b| self.visit_block_item(b));
+    fn visit_break(&mut self, break_stmt: &BreakStmt) -> () {
+        if break_stmt.loop_or_switch {
+            self.current_body.push(Instruction::Jump(
+                Self::loop_label(*break_stmt.id, "break_"),
+                DebugInfo::new(break_stmt.id.1.line, "break loop".to_string()),
+            ));
+        } else {
+            self.current_body.push(Instruction::Jump(
+                Self::switch_label(*break_stmt.id, "break_"),
+                DebugInfo::new(break_stmt.id.1.line, "break switch".to_string()),
+            ));
+        }
+    }
+
+    fn visit_continue(&mut self, continue_stmt: &WithToken<i32>) -> () {
+        self.current_body.push(Instruction::Jump(
+            Self::loop_label(**continue_stmt, "continue_"),
+            DebugInfo::new(continue_stmt.1.line, "continue".to_string()),
+        ));
+    }
+
+    fn visit_compound(&mut self, stmt: &ast::CompoundStmt) -> () {
+        stmt.block.0.iter().for_each(|b| self.visit_block_item(b));
     }
 
     fn visit_expression(&mut self, expr: &ast::Expr) -> () {
         self.visit_expr(expr);
+    }
+
+    fn visit_for(&mut self, for_stmt: &ast::ForStmt) -> () {
+        for_stmt.initializer.as_ref().map(|init| match init {
+            ForStmtInitializer::Expr(expr) => {
+                self.visit_expr(expr);
+            }
+            ForStmtInitializer::VarDecl(decls) => {
+                for decl in decls {
+                    self.visit_var_decl(decl);
+                }
+            }
+        });
+
+        self.current_body.push(Instruction::Label(
+            Self::loop_label(for_stmt.loop_id, ""),
+            DebugInfo::new(for_stmt.initializer.1.line, "for loop begins".to_string()),
+        ));
+
+        for_stmt.condition.as_ref().map(|cond| {
+            let value = self.visit_expr(cond);
+            self.current_body.push(Instruction::JumpIfZero(
+                value,
+                Self::loop_label(for_stmt.loop_id, "break_"),
+                DebugInfo::new(for_stmt.condition.1.line, "'for' condition".to_string()),
+            ));
+        });
+
+        self.visit_stmt(&for_stmt.body);
+
+        self.current_body.push(Instruction::Label(
+            Self::loop_label(for_stmt.loop_id, "continue_"),
+            DebugInfo::new(for_stmt.step.1.line, "for loop continue label".to_string()),
+        ));
+        for_stmt.step.as_ref().map(|step| self.visit_expr(step));
+        self.current_body.push(Instruction::Jump(
+            Self::loop_label(for_stmt.loop_id, ""),
+            DebugInfo::new(for_stmt.step.1.line, "for loop back to start".to_string()),
+        ));
+
+        self.current_body.push(Instruction::Label(
+            Self::loop_label(for_stmt.loop_id, "break_"),
+            DebugInfo::new(for_stmt.step.1.line, "for loop ends".to_string()),
+        ));
     }
 
     fn visit_goto(&mut self, label: &WithToken<String>) -> () {
@@ -440,6 +519,112 @@ impl StmtRefVisitor<()> for GenerateTacky {
             DebugInfo::new(line, "".to_string()),
         ));
     }
+
+    fn visit_switch(&mut self, switch_stmt: &ast::SwitchStmt) -> () {
+        let cond = self.visit_expr(&switch_stmt.cond);
+        let dst = self.new_var();
+        let mut case_id = 0;
+        let mut labels = Vec::new();
+
+        for case in switch_stmt.cases.iter() {
+            let case_label = Self::switch_label(switch_stmt.switch_id, &format!("case_{case_id}_"));
+            labels.push(case_label.clone());
+            case_id += 1;
+            tacky! {
+                self.current_body;
+                case.1.line;
+                debug_info;
+
+                value <- self.visit_literal(&case.value);
+                Instruction::Binary(
+                    BinaryOp::Eq,
+                    cond.clone(),
+                    value,
+                    dst.clone(),
+                    debug_info
+                ) => "case compare".to_string(),
+                Instruction::JumpIfNotZero(dst.clone(), case_label, debug_info)
+                    => "case not equal".to_string()
+            };
+        }
+
+        let default_label = Self::switch_label(switch_stmt.switch_id, "default_");
+        self.current_body.push(Instruction::Jump(
+            default_label.clone(),
+            DebugInfo::new(switch_stmt.cond.1.line, "default".to_string()),
+        ));
+
+        for (case, label) in switch_stmt.cases.iter().zip(labels.into_iter()) {
+            self.current_body.push(Instruction::Label(
+                label,
+                DebugInfo::new(case.1.line, format!("case {:?}", case.value)),
+            ));
+            self.visit_compound(&case.stmt);
+        }
+
+        self.current_body.push(Instruction::Label(
+            default_label,
+            DebugInfo::new(switch_stmt.cond.1.line, "".to_string()),
+        ));
+        self.visit_compound(&switch_stmt.default);
+
+        self.current_body.push(Instruction::Label(
+            Self::switch_label(switch_stmt.switch_id, "break_"),
+            DebugInfo::new(switch_stmt.cond.1.line, "switch statement end".to_string()),
+        ));
+    }
+
+    fn visit_while(&mut self, while_stmt: &ast::WhileStmt) -> () {
+        if !while_stmt.do_while {
+            tacky! {
+                self.current_body;
+                while_stmt.cond.1.line;
+                debug_info;
+
+                Instruction::Label(Self::loop_label(while_stmt.loop_id, ""), debug_info)
+                    => "while loop start".to_string(),
+                Instruction::Label(Self::loop_label(while_stmt.loop_id, "continue_"), debug_info)
+                    => "".to_string()
+            }
+
+            tacky! {
+                self.current_body;
+                while_stmt.cond.1.line;
+                debug_info;
+
+                result <- self.visit_expr(&while_stmt.cond);
+                Instruction::JumpIfZero(result, Self::loop_label(while_stmt.loop_id, "break_"), debug_info)
+                    => "condition is false".to_string();
+                _body <- self.visit_stmt(&while_stmt.body);
+                Instruction::Jump(Self::loop_label(while_stmt.loop_id, ""), debug_info)
+                    => "jump back to start of loop".to_string(),
+                Instruction::Label(Self::loop_label(while_stmt.loop_id, "break_"), debug_info)
+                    => "end of loop".to_string()
+            }
+        } else {
+            self.current_body.push(Instruction::Label(
+                Self::loop_label(while_stmt.loop_id, ""),
+                DebugInfo::new(while_stmt.cond.1.line, "do while loop start".to_string()),
+            ));
+
+            tacky! {
+                self.current_body;
+                while_stmt.cond.1.line;
+                debug_info;
+
+                _body <- self.visit_stmt(&while_stmt.body);
+                Instruction::Label(Self::loop_label(while_stmt.loop_id, "continue_"), debug_info)
+                    => "".to_string();
+                cond <- self.visit_expr(&while_stmt.cond);
+                Instruction::JumpIfZero(cond, Self::loop_label(while_stmt.loop_id, "break_"), debug_info)
+                    => "condition is false".to_string(),
+                Instruction::Jump(Self::loop_label(while_stmt.loop_id, ""), debug_info)
+                    => "jump back to start of do while loop".to_string(),
+                Instruction::Label(Self::loop_label(while_stmt.loop_id, "break_"), debug_info)
+                    => "end of do while loop".to_string()
+            }
+        }
+    }
 }
 
 impl ASTRefVisitor for GenerateTacky {
@@ -453,14 +638,14 @@ impl ASTRefVisitor for GenerateTacky {
     fn visit_block_item(&mut self, block_item: &ast::BlockItem) -> Self::BlockItemResult {
         match block_item {
             BlockItem::Stmt(stmt) => self.visit_stmt(stmt),
-            BlockItem::VarDecl(decl) => self.visit_var_decl(decl),
+            BlockItem::VarDecl(decls) => decls.iter().for_each(|decl| self.visit_var_decl(decl)),
         };
     }
 
     fn visit_function_def(&mut self, function_def: &ast::FunctionDef) -> Self::FuncDefResult {
         self.visit_compound(&function_def.body);
         // self.current_body
-        //     .push(Instruction::Return(Value::Literal(Literal::Integer(0))));
+        //     .push(Instruction::Return(Value::Literal(Literal::Integral(Integral::Integer(0)))));
         let body = std::mem::replace(&mut self.current_body, Vec::new());
         FunctionDef {
             name: function_def.name.0.clone(),

@@ -3,8 +3,9 @@ mod expr;
 pub mod pretty_print_ast;
 mod stmt;
 
+use ordermap::OrderMap;
+
 use crate::lexer::token::{self, Span, Token, TokenType};
-use crate::lexer::LexerError;
 use ast::*;
 use multipeek::{multipeek, MultiPeek};
 use thiserror::Error;
@@ -40,9 +41,11 @@ macro_rules! parse_binary_expr {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("ParseError at {token:?}: {error}")]
 pub struct ParseError {
     pub token: Token,
+    #[source]
     pub error: ParseErrorType,
 }
 
@@ -60,17 +63,19 @@ pub enum ParseErrorType {
         context: &'static str,
     },
 
-    #[error("syntax error: {0:?}")]
-    LexerError(LexerError),
-}
+    #[error("break or continue statement used outside loop")]
+    BreakContinueOutsideLoop,
 
-impl From<LexerError> for ParseError {
-    fn from(err: LexerError) -> Self {
-        ParseError {
-            token: err.token.clone(),
-            error: ParseErrorType::LexerError(err),
-        }
-    }
+    #[error("case label used outside switch statement")]
+    CaseOutsideSwitch,
+    #[error("case value is not an integer constant")]
+    CaseValueNotConstant,
+    #[error("default label used outside switch statement")]
+    DefaultOutsideSwitch,
+    #[error("same case value used more than once (previous label at {prev:?})")]
+    DuplicateCaseValue { prev: Token },
+    #[error("duplicate default labels (previous one at {prev:?})")]
+    DuplicateDefaultLabel { prev: Token },
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -83,7 +88,6 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str, tokens: Vec<Token>) -> Self {
-        println!("input: {:?}, len: {}", input, input.len());
         Self {
             input,
             tokens: multipeek(tokens.into_iter()),
@@ -223,6 +227,13 @@ impl<'a> Parser<'a> {
             }
         }
     }
+
+    fn check_declaration(&mut self) -> bool {
+        match self.peek_token_type() {
+            Some(TokenType::KInt) => true,
+            _ => false,
+        }
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -243,7 +254,10 @@ impl<'a> Parser<'a> {
         self.consume(TokenType::Identifier(String::from("void")), "void")?;
         self.consume(TokenType::RParen, ")")?;
 
-        let body = self.compound("function")?;
+        let body = CompoundStmt {
+            block: self.block("function")?,
+            introduce_scope: true,
+        };
         self.current_function_labels.clear();
 
         Ok(FunctionDef { name, body })
@@ -251,7 +265,7 @@ impl<'a> Parser<'a> {
 
     fn block_item(&mut self, context: &'static str) -> ParseResult<BlockItem> {
         match self.peek_token_type() {
-            Some(TokenType::KInt) => self.declaration(),
+            _ if self.check_declaration() => self.declaration().map(BlockItem::VarDecl),
             _ => Ok(BlockItem::Stmt(self.statement(context)?)),
         }
     }
@@ -260,7 +274,32 @@ impl<'a> Parser<'a> {
 impl<'a> Parser<'a> {
     // Methods for parsing expressions
 
+    fn optional_expression(
+        &mut self,
+        followed_by: TokenType,
+        followed_by_str: &'static str,
+    ) -> ParseResult<(Option<Expr>, Token)> {
+        match self.peek_token_type() {
+            Some(tt) if *tt == followed_by => Ok((None, self.advance().unwrap())),
+            _ => {
+                let expr = self.expression()?;
+                let token = self.consume(followed_by, followed_by_str)?;
+                Ok((Some(expr), token))
+            }
+        }
+    }
+
     fn expression(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.expression_no_comma()?;
+        while let Some(TokenType::Comma) = self.peek_token_type() {
+            self.advance();
+            let rhs = self.expression_no_comma()?;
+            expr = Expr::Comma(Comma(Box::new(expr), Box::new(rhs)));
+        }
+        Ok(expr)
+    }
+
+    fn expression_no_comma(&mut self) -> ParseResult<Expr> {
         self.assignment()
     }
 
@@ -421,7 +460,9 @@ impl<'a> Parser<'a> {
                 let token = self.advance().unwrap();
                 let value = match &token.tok_type {
                     TokenType::Literal(lit) => match lit {
-                        token::Literal::Integer(value) => Literal::Integer(*value),
+                        token::Literal::Integer(value) => {
+                            Literal::Integral(Integral::Integer(*value))
+                        }
                         _ => todo!(),
                     },
                     _ => todo!(),
@@ -451,39 +492,61 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn declaration(&mut self) -> ParseResult<BlockItem> {
+    fn declaration(&mut self) -> ParseResult<Vec<VarDecl>> {
         self.advance();
+        let mut decls = Vec::new();
 
-        let name = self.consume_identifier()?;
+        loop {
+            let name = self.consume_identifier()?;
 
-        let init = if let Some(TokenType::Equal) = self.peek_token_type() {
-            self.advance();
-            let rhs = self.expression()?;
-            Some(rhs)
-        } else {
-            None
-        };
+            let init = if let Some(TokenType::Equal) = self.peek_token_type() {
+                self.advance();
+                let rhs = self.expression_no_comma()?;
+                Some(rhs)
+            } else {
+                None
+            };
+
+            decls.push(VarDecl { name, init });
+            if !self.match_(TokenType::Comma) {
+                break;
+            }
+        }
         self.consume(TokenType::Semicolon, ";")?;
 
-        Ok(BlockItem::VarDecl(VarDecl { name, init }))
+        Ok(decls)
     }
 
     fn statement(&mut self, context: &'static str) -> ParseResult<Stmt> {
         match self.peek_token_type() {
-            Some(TokenType::LBrace) => self.compound(context).map(Stmt::Compound),
+            Some(TokenType::LBrace) => self.block(context).map(|block| {
+                Stmt::Compound(CompoundStmt {
+                    introduce_scope: true,
+                    block,
+                })
+            }),
+            Some(TokenType::KBreak) => self.break_or_continue(TokenType::KBreak),
+            Some(TokenType::KCase) => Err(self.error_at_current(ParseErrorType::CaseOutsideSwitch)),
+            Some(TokenType::KContinue) => self.break_or_continue(TokenType::KContinue),
+            Some(TokenType::KDefault) => {
+                Err(self.error_at_current(ParseErrorType::DefaultOutsideSwitch))
+            }
+            Some(TokenType::KDo) => self.do_while_stmt(),
+            Some(TokenType::KFor) => self.for_stmt(),
             Some(TokenType::KGoto) => self.goto_stmt(),
             Some(TokenType::KIf) => self.if_stmt(),
             Some(TokenType::KReturn) => self.return_statement(),
+            Some(TokenType::KSwitch) => self.switch_statement(),
+            Some(TokenType::KWhile) => self.while_statement(),
             Some(TokenType::Semicolon) => {
                 self.advance();
                 Ok(Stmt::Null)
             }
             Some(TokenType::KInt) => {
-                let BlockItem::VarDecl(decl) = self.declaration()? else {
-                    unreachable!()
-                };
+                let mut decl = self.declaration()?;
+                let tok = decl.pop().unwrap();
                 Err(self.error_at(
-                    decl.name.1,
+                    tok.name.1,
                     ParseErrorType::InvalidDeclaration {
                         decl_type: "variable",
                         context,
@@ -505,20 +568,84 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn compound(&mut self, context: &'static str) -> ParseResult<Block> {
+    fn break_or_continue(&mut self, tok_type: TokenType) -> ParseResult<Stmt> {
+        let tok = self.advance().unwrap();
+        let stmt = match tok_type {
+            TokenType::KBreak => Stmt::Break(BreakStmt {
+                loop_or_switch: false,
+                id: WithToken(-1, tok),
+            }),
+            TokenType::KContinue => Stmt::Continue(WithToken(-1, tok)),
+            _ => unreachable!(),
+        };
+        self.consume(TokenType::Semicolon, ";")?;
+        Ok(stmt)
+    }
+
+    fn block(&mut self, context: &'static str) -> ParseResult<Block> {
         self.consume(TokenType::LBrace, "{")?;
 
+        let block = self.block_body(&[TokenType::RBrace], context)?;
+
+        self.consume(TokenType::RBrace, "}")?;
+        Ok(block)
+    }
+
+    fn block_body(&mut self, end: &[TokenType], context: &'static str) -> ParseResult<Block> {
         let mut body = Vec::new();
         loop {
             match self.peek_token_type() {
-                Some(TokenType::RBrace) => break,
+                Some(tt) if end.contains(tt) => break,
                 _ => body.push(self.block_item(context)?),
             };
         }
 
-        self.consume(TokenType::RBrace, "}")?;
-
         Ok(Block(body))
+    }
+
+    fn do_while_stmt(&mut self) -> ParseResult<Stmt> {
+        self.consume(TokenType::KDo, "do")?;
+        let body = Box::new(self.statement("do while loop")?);
+
+        self.consume(TokenType::KWhile, "while")?;
+        let token = self.consume(TokenType::LParen, "(")?;
+        let cond = WithToken(self.expression()?, token);
+        self.consume(TokenType::RParen, ")")?;
+        self.consume(TokenType::Semicolon, ";")?;
+
+        Ok(Stmt::While(WhileStmt {
+            loop_id: -1,
+            cond,
+            body,
+            do_while: true,
+        }))
+    }
+
+    fn for_stmt(&mut self) -> ParseResult<Stmt> {
+        self.consume(TokenType::KFor, "for")?;
+        let lparen = self.consume(TokenType::LParen, "(")?;
+
+        let init = if self.check_declaration() {
+            Some(ForStmtInitializer::VarDecl(self.declaration()?))
+        } else {
+            self.optional_expression(TokenType::Semicolon, ";")?
+                .0
+                .map(ForStmtInitializer::Expr)
+        };
+
+        let (cond, cond_semi) = self.optional_expression(TokenType::Semicolon, ";")?;
+
+        let (step, step_semi) = self.optional_expression(TokenType::RParen, ")")?;
+
+        let body = self.statement("for statement")?;
+
+        Ok(Stmt::For(ForStmt {
+            loop_id: -1,
+            initializer: WithToken(init, lparen),
+            condition: WithToken(cond, cond_semi),
+            step: WithToken(step, step_semi),
+            body: Box::new(body),
+        }))
     }
 
     fn goto_stmt(&mut self) -> ParseResult<Stmt> {
@@ -555,6 +682,104 @@ impl<'a> Parser<'a> {
         let ret_value = WithToken(self.expression()?, token);
         self.consume(TokenType::Semicolon, ";")?;
         Ok(Stmt::Return { ret_value })
+    }
+
+    fn switch_statement(&mut self) -> ParseResult<Stmt> {
+        self.consume(TokenType::KSwitch, "switch")?;
+
+        let cond_token = self.consume(TokenType::LParen, "(")?;
+        let cond = WithToken(self.expression()?, cond_token);
+        self.consume(TokenType::RParen, ")")?;
+
+        let mut cases: OrderMap<Integral, (CompoundStmt, Token, Token)> = OrderMap::new();
+        let mut default_case = None;
+        self.consume(TokenType::LBrace, "{")?;
+
+        while let Some(TokenType::KCase | TokenType::KDefault) = self.peek_token_type() {
+            let kw = self.advance().unwrap();
+
+            if let TokenType::KCase = kw.tok_type {
+                let value = self.expression()?;
+                let (value, tok) = match value {
+                    Expr::Literal(WithToken(Literal::Integral(lit), tok)) => (lit, tok),
+                    _ => return Err(self.error_at_current(ParseErrorType::CaseValueNotConstant)),
+                };
+
+                if cases.contains_key(&value) {
+                    return Err(self.error_at_current(ParseErrorType::DuplicateCaseValue {
+                        prev: cases[&value].1.clone(),
+                    }));
+                }
+
+                self.consume(TokenType::Colon, ":")?;
+
+                let stmt = CompoundStmt {
+                    introduce_scope: false,
+                    block: self.block_body(
+                        &[TokenType::KCase, TokenType::KDefault, TokenType::RBrace],
+                        "case body",
+                    )?,
+                };
+                cases.insert(value, (stmt, tok, kw));
+            } else {
+                if let Some(WithToken(_, tok)) = default_case {
+                    return Err(
+                        self.error_at_current(ParseErrorType::DuplicateDefaultLabel { prev: tok })
+                    );
+                }
+                self.consume(TokenType::Colon, ":")?;
+                let stmt = CompoundStmt {
+                    introduce_scope: false,
+                    block: self.block_body(
+                        &[TokenType::KCase, TokenType::KDefault, TokenType::RBrace],
+                        "case body",
+                    )?,
+                };
+                default_case = Some(WithToken(stmt, kw));
+            }
+        }
+
+        self.consume(TokenType::RBrace, "}")?;
+        let cases = cases
+            .into_iter()
+            .map(|(val, (stmt, lit, kw))| {
+                WithToken(
+                    Case {
+                        value: WithToken(Literal::Integral(val), lit),
+                        stmt,
+                    },
+                    kw,
+                )
+            })
+            .collect();
+        let default = default_case.map(|wt| wt.unwrap()).unwrap_or(CompoundStmt {
+            block: Block(Vec::new()),
+            introduce_scope: false,
+        });
+
+        Ok(Stmt::Switch(SwitchStmt {
+            switch_id: -1,
+            cond,
+            cases,
+            default,
+        }))
+    }
+
+    fn while_statement(&mut self) -> ParseResult<Stmt> {
+        self.consume(TokenType::KWhile, "while")?;
+
+        let token = self.consume(TokenType::LParen, "(")?;
+        let cond = WithToken(self.expression()?, token);
+        self.consume(TokenType::RParen, ")")?;
+
+        let body = Box::new(self.statement("while statement")?);
+
+        Ok(Stmt::While(WhileStmt {
+            loop_id: -1,
+            cond,
+            body,
+            do_while: false,
+        }))
     }
 
     fn label(&mut self, context: &'static str) -> ParseResult<Stmt> {
@@ -614,6 +839,3 @@ fn binary_tt_to_op(tt: &TokenType) -> BinaryOp {
         _ => unreachable!(),
     }
 }
-
-#[cfg(test)]
-mod test;

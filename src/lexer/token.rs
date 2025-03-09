@@ -52,12 +52,18 @@ pub enum TokenType {
     StarEq,
     Tilde,
 
+    KBreak,
+    KCase,
+    KContinue,
+    KDefault,
+    KDo,
     KElse,
     KFor,
     KGoto,
     KIf,
     KInt,
     KReturn,
+    KSwitch,
     KWhile,
 
     Literal(Literal),
