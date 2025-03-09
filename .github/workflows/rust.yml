@@ -19,12 +19,6 @@ jobs:
 
     - name: Build
       run: cargo build --verbose
-
-    - name: List test files
-      run: |
-        echo "Current directory: $(pwd)"
-        echo "Listing files in ccrust/tests/files:"
-        ls -R ccrust/tests/files || echo "Test files directory not found"
-
+      
     - name: Run tests
       run: cargo test --verbose
