@@ -4,12 +4,12 @@ use std::process;
 
 #[test]
 fn test_return() {
-    let file = "/home/akul/ccrust/tests/files/test_loop_bitwise.c";
+    let file = "tests/files/test_loop_bitwise.c";
     let mut command = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
     command
         .arg(file)
-        .args(["-o", "/home/akul/ccrust/tests/files/output/test_loop_bitwise"]);
+        .args(["-o", "tests/files/output/test_loop_bitwise"]);
     println!("{command:?}");
 
     let output = command.output().unwrap();
@@ -26,20 +26,20 @@ fn test_return() {
         .arg(file)
         .args([
             "-o",
-            "/home/akul/ccrust/tests/files/output/test_loop_bitwise_gcc",
+            "tests/files/output/test_loop_bitwise_gcc",
         ])
         .status()
         .unwrap();
     assert!(gcc_compile_status.success());
 
-    let expected_ec = process::Command::new("/home/akul/ccrust/tests/files/output/test_loop_bitwise_gcc")
+    let expected_ec = process::Command::new("tests/files/output/test_loop_bitwise_gcc")
         .status()
         .unwrap()
         .code()
         .unwrap();
 
-    Command::new("/home/akul/ccrust/tests/files/output/test_loop_bitwise")
+    Command::new("tests/files/output/test_loop_bitwise")
         .assert()
         .code(expected_ec);
-    fs::remove_file("/home/akul/ccrust/tests/files/test_loop_bitwise.s").unwrap();
+    fs::remove_file("tests/files/test_loop_bitwise.s").unwrap();
 }

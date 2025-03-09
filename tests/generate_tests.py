@@ -2,7 +2,7 @@
 import pathlib
 import termcolor
 
-TESTS_DIR = pathlib.Path("/home/akul/ccrust/tests")
+TESTS_DIR = pathlib.Path("tests/")
 
 TEMPLATE = """\
 use std::fs;
