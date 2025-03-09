@@ -2,4 +2,5 @@
 Cargo.lock
 grammar.ebnf
 run_compiled_executable.py
-files/
+/files
+tests/files/output
