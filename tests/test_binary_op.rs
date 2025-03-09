@@ -4,12 +4,12 @@ use std::process;
 
 #[test]
 fn test_return() {
-    let file = "/home/akul/rustcc/tests/files/test_binary_op.c";
+    let file = "/home/akul/ccrust/tests/files/test_binary_op.c";
     let mut command = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
     command
         .arg(file)
-        .args(["-o", "/home/akul/rustcc/tests/files/output/test_binary_op"]);
+        .args(["-o", "/home/akul/ccrust/tests/files/output/test_binary_op"]);
     println!("{command:?}");
 
     let output = command.output().unwrap();
@@ -26,20 +26,20 @@ fn test_return() {
         .arg(file)
         .args([
             "-o",
-            "/home/akul/rustcc/tests/files/output/test_binary_op_gcc",
+            "/home/akul/ccrust/tests/files/output/test_binary_op_gcc",
         ])
         .status()
         .unwrap();
     assert!(gcc_compile_status.success());
 
-    let expected_ec = process::Command::new("/home/akul/rustcc/tests/files/output/test_binary_op_gcc")
+    let expected_ec = process::Command::new("/home/akul/ccrust/tests/files/output/test_binary_op_gcc")
         .status()
         .unwrap()
         .code()
         .unwrap();
 
-    Command::new("/home/akul/rustcc/tests/files/output/test_binary_op")
+    Command::new("/home/akul/ccrust/tests/files/output/test_binary_op")
         .assert()
         .code(expected_ec);
-    fs::remove_file("/home/akul/rustcc/tests/files/test_binary_op.s").unwrap();
+    fs::remove_file("/home/akul/ccrust/tests/files/test_binary_op.s").unwrap();
 }

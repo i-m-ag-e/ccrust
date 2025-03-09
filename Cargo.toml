@@ -1,5 +1,5 @@
 [package]
-name = "rustcc"
+name = "ccrust"
 version = "0.1.0"
 edition = "2021"
 
