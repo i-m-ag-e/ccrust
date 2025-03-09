@@ -1,14 +1,15 @@
 use std::fs;
 use assert_cmd::Command;
 use std::process;
+use std::path::PathBuf;
 
 #[test]
 fn test_return() {
-    let file = "tests/files/test_return.c";
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/files/test_return.c");
     let mut command = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
     command
-        .arg(file)
+        .arg(&file)
         .args(["-o", "tests/files/output/test_return"]);
     println!("{command:?}");
 
@@ -23,7 +24,7 @@ fn test_return() {
 
     let mut gcc_compile = process::Command::new("gcc");
     let gcc_compile_status = gcc_compile
-        .arg(file)
+        .arg(&file)
         .args([
             "-o",
             "tests/files/output/test_return_gcc",

@@ -8,14 +8,15 @@ TEMPLATE = """\
 use std::fs;
 use assert_cmd::Command;
 use std::process;
+use std::path::PathBuf;
 
 #[test]
 fn test_return() {{
-    let file = "{0}";
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("{0}");
     let mut command = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
     command
-        .arg(file)
+        .arg(&file)
         .args(["-o", "{1}"]);
     println!("{{command:?}}");
 
@@ -30,7 +31,7 @@ fn test_return() {{
 
     let mut gcc_compile = process::Command::new("gcc");
     let gcc_compile_status = gcc_compile
-        .arg(file)
+        .arg(&file)
         .args([
             "-o",
             "{1}_gcc",
