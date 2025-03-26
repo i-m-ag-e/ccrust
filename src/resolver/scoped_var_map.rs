@@ -11,7 +11,7 @@ pub struct ScopedVarMap {
 impl ScopedVarMap {
     pub fn new() -> ScopedVarMap {
         ScopedVarMap {
-            scope_stack: Vec::new(),
+            scope_stack: vec![VarMap::new()],
         }
     }
 

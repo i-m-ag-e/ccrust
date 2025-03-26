@@ -5,7 +5,10 @@ mod stmt;
 
 use ordermap::OrderMap;
 
-use crate::lexer::token::{self, Span, Token, TokenType};
+use crate::{
+    lexer::token::{self, Span, Token, TokenType},
+    type_checker::r#type::Type,
+};
 use ast::*;
 use multipeek::{multipeek, MultiPeek};
 use thiserror::Error;
@@ -107,8 +110,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn peek_token_type_nth(&mut self, n: usize) -> Option<&TokenType> {
+        self.peek_nth(n).map(|tok| &tok.tok_type)
+    }
+
     fn peek_next(&mut self) -> Option<&Token> {
         self.tokens.peek_nth(1)
+    }
+
+    fn peek_nth(&mut self, n: usize) -> Option<&Token> {
+        self.tokens.peek_nth(n)
     }
 
     fn advance(&mut self) -> Option<Token> {
@@ -240,32 +251,65 @@ impl<'a> Parser<'a> {
     pub fn program(&mut self) -> ParseResult<Program> {
         let mut funs = Vec::new();
         while !self.match_(TokenType::EOF) {
-            funs.push(self.function_def()?);
+            funs.push(self.function_definition()?);
         }
         Ok(Program(funs))
     }
 
-    fn function_def(&mut self) -> ParseResult<FunctionDef> {
+    fn function_declaration(&mut self, definition_allowed: bool) -> ParseResult<FunctionDecl> {
         self.consume(TokenType::KInt, "int")?;
 
         let name = self.consume_identifier()?;
 
         self.consume(TokenType::LParen, "(")?;
-        self.consume(TokenType::Identifier(String::from("void")), "void")?;
+
+        let mut params = Vec::new();
+        match self.peek_token_type() {
+            Some(TokenType::RParen) => {}
+            Some(TokenType::Identifier(id)) if id == "void" => {
+                self.advance();
+            }
+            _ => loop {
+                self.consume(TokenType::KInt, "int")?;
+                let param_name = self.consume_identifier()?;
+                params.push(param_name);
+                if !self.match_(TokenType::Comma) {
+                    break;
+                }
+            },
+        };
+
         self.consume(TokenType::RParen, ")")?;
 
-        let body = CompoundStmt {
-            block: self.block("function")?,
-            introduce_scope: true,
+        if !definition_allowed {
+            self.consume(TokenType::Semicolon, ";")?;
+        }
+
+        Ok(FunctionDecl {
+            name,
+            params,
+            body: None,
+        })
+    }
+
+    fn function_definition(&mut self) -> ParseResult<FunctionDecl> {
+        let decl = self.function_declaration(true)?;
+        let body = if let Some(TokenType::Semicolon) = self.peek_token_type() {
+            self.advance();
+            None
+        } else {
+            Some(CompoundStmt {
+                block: self.block("function")?,
+                introduce_scope: true,
+            })
         };
         self.current_function_labels.clear();
-
-        Ok(FunctionDef { name, body })
+        Ok(FunctionDecl { body, ..decl })
     }
 
     fn block_item(&mut self, context: &'static str) -> ParseResult<BlockItem> {
         match self.peek_token_type() {
-            _ if self.check_declaration() => self.declaration().map(BlockItem::VarDecl),
+            _ if self.check_declaration() => self.declaration(),
             _ => Ok(BlockItem::Stmt(self.statement(context)?)),
         }
     }
@@ -478,7 +522,13 @@ impl<'a> Parser<'a> {
             Some(TokenType::Identifier(name)) => {
                 let name = name.clone();
                 let token = self.advance().unwrap();
-                Ok(Expr::Var(WithToken(name, token)))
+                let name = WithToken(name, token);
+
+                if let Some(TokenType::LParen) = self.peek_token_type() {
+                    self.function_call(name).map(Expr::FunctionCall)
+                } else {
+                    Ok(Expr::Var(name))
+                }
             }
             _ => {
                 let span = self.peek().unwrap().span;
@@ -489,25 +539,64 @@ impl<'a> Parser<'a> {
             }
         }
     }
+
+    fn function_call(&mut self, name: Identifier) -> ParseResult<FunctionCall> {
+        let mut token = self.consume(TokenType::LParen, "(")?;
+
+        let mut args = Vec::new();
+        if let Some(TokenType::RParen) = self.peek_token_type() {
+        } else {
+            loop {
+                args.push(WithToken(self.expression_no_comma()?, token));
+                if let Some(TokenType::Comma) = self.peek_token_type() {
+                    token = self.advance().unwrap();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType::RParen, ")")?;
+
+        Ok(FunctionCall {
+            name: Box::new(Expr::Var(name)),
+            args,
+        })
+    }
 }
 
 impl<'a> Parser<'a> {
-    fn declaration(&mut self) -> ParseResult<Vec<VarDecl>> {
+    fn declaration(&mut self) -> ParseResult<BlockItem> {
+        match (
+            self.peek_token_type_nth(1).cloned(),
+            self.peek_token_type_nth(2),
+        ) {
+            (Some(TokenType::Identifier(_)), Some(TokenType::LParen)) => self
+                .function_declaration(false)
+                .map(BlockItem::FunctionDecl),
+            _ => self.var_declaration().map(BlockItem::VarDecl),
+        }
+    }
+
+    fn var_declaration(&mut self) -> ParseResult<Vec<VarDecl>> {
         self.advance();
         let mut decls = Vec::new();
 
         loop {
             let name = self.consume_identifier()?;
 
-            let init = if let Some(TokenType::Equal) = self.peek_token_type() {
-                self.advance();
+            let init = if self.match_(TokenType::Equal) {
                 let rhs = self.expression_no_comma()?;
                 Some(rhs)
             } else {
                 None
             };
 
-            decls.push(VarDecl { name, init });
+            decls.push(VarDecl {
+                name,
+                init,
+                ty: Type::Int,
+            });
             if !self.match_(TokenType::Comma) {
                 break;
             }
@@ -543,14 +632,17 @@ impl<'a> Parser<'a> {
                 Ok(Stmt::Null)
             }
             Some(TokenType::KInt) => {
-                let mut decl = self.declaration()?;
-                let tok = decl.pop().unwrap();
+                let decl = self.declaration()?;
+                let (token, decl_type) = match decl {
+                    BlockItem::FunctionDecl(func_decl) => (func_decl.name.1, "functiom"),
+                    BlockItem::VarDecl(mut var_decl) => {
+                        (var_decl.pop().unwrap().name.1, "variable")
+                    }
+                    _ => unreachable!(),
+                };
                 Err(self.error_at(
-                    tok.name.1,
-                    ParseErrorType::InvalidDeclaration {
-                        decl_type: "variable",
-                        context,
-                    },
+                    token,
+                    ParseErrorType::InvalidDeclaration { decl_type, context },
                 ))
             }
             Some(TokenType::Identifier(_)) => {
@@ -626,7 +718,7 @@ impl<'a> Parser<'a> {
         let lparen = self.consume(TokenType::LParen, "(")?;
 
         let init = if self.check_declaration() {
-            Some(ForStmtInitializer::VarDecl(self.declaration()?))
+            Some(ForStmtInitializer::VarDecl(self.var_declaration()?))
         } else {
             self.optional_expression(TokenType::Semicolon, ";")?
                 .0

@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "asm_gen"), allow(unused_imports))]
+
 use std::{
     os::unix::process::ExitStatusExt,
     path::Path,
@@ -22,11 +24,16 @@ pub mod parser;
 pub mod resolver;
 #[cfg(feature = "resolve")]
 use resolver::Resolver;
+#[cfg(feature = "resolve")]
+pub mod type_checker;
+#[cfg(feature = "resolve")]
+use type_checker::TypeChecker;
 #[cfg(feature = "asm_gen")]
 pub mod asm;
 #[cfg(feature = "asm_gen")]
 pub mod tacky;
 
+#[cfg_attr(not(feature = "asm_gen"), allow(unused_variables))]
 pub fn compile(input: &str, debug: bool) -> anyhow::Result<String> {
     let lexer = lexer::Lexer::new(input);
     let tokens = lexer.collect::<Result<Vec<_>, _>>()?;
@@ -36,7 +43,11 @@ pub fn compile(input: &str, debug: bool) -> anyhow::Result<String> {
     let program = parser.program()?;
 
     #[cfg(feature = "resolve")]
-    let program = Resolver::new().visit_program(program)?;
+    let program = {
+        let resolved_prog = Resolver::new().visit_program(program)?;
+        TypeChecker::new().visit_program(&resolved_prog)?;
+        resolved_prog
+    };
 
     #[cfg(feature = "asm_gen")]
     {
@@ -60,6 +71,7 @@ pub fn assemble(
     file: &Path,
     asm: &str,
     output: &Option<String>,
+    to_object: bool,
     keep_asm: bool,
     debug: bool,
 ) -> std::io::Result<ExitStatus> {

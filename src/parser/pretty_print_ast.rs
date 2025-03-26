@@ -105,6 +105,28 @@ impl ExprRefVisitor<String> for PrettyPrint {
         expr_str
     }
 
+    fn visit_function_call(&mut self, call: &FunctionCall) -> String {
+        let FunctionCall { name, args } = call;
+        let Expr::Var(ref name) = **name else {
+            unreachable!()
+        };
+        self.indent += 1;
+
+        let call_str = format!(
+            "({0}) {1}(\n{2}\n{3})",
+            "CALL".red(),
+            name.blue(),
+            args.iter()
+                .map(|arg| format!("{}{}", self.indent_inside(), self.visit_expr(arg)))
+                .collect::<Vec<_>>()
+                .join(",\n"),
+            self.indent_now()
+        );
+
+        self.indent -= 1;
+        call_str
+    }
+
     fn visit_literal(&mut self, literal: &WithToken<Literal>) -> String {
         match &literal.0 {
             Literal::Float(f) => format!("{}({})", "FLOAT".green(), f.to_string().magenta()),
@@ -339,7 +361,7 @@ impl StmtRefVisitor<String> for PrettyPrint {
 impl ASTRefVisitor for PrettyPrint {
     type BlockItemResult = String;
     type ExprResult = String;
-    type FuncDefResult = String;
+    type FuncDeclResult = String;
     type ProgramResult = String;
     type StmtResult = String;
     type VarDeclResult = String;
@@ -348,7 +370,7 @@ impl ASTRefVisitor for PrettyPrint {
         program
             .0
             .iter()
-            .map(|def| self.visit_function_def(def))
+            .map(|def| self.visit_function_decl(def))
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -361,21 +383,45 @@ impl ASTRefVisitor for PrettyPrint {
                 .map(|decl| self.visit_var_decl(decl))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            BlockItem::FunctionDecl(decl) => self.visit_function_decl(decl),
         }
     }
 
-    fn visit_function_def(&mut self, function_def: &FunctionDef) -> String {
+    fn visit_function_decl(&mut self, function_decl: &FunctionDecl) -> String {
         self.indent += 1;
-        let body_str = function_def
+        let body_str = function_decl
             .body
-            .block
-            .0
+            .as_ref()
+            .map(|body| {
+                body.block
+                    .0
+                    .iter()
+                    .map(|item| self.visit_block_item(item))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or(format!("{};", self.indent_inside()));
+        let args = function_decl
+            .params
             .iter()
-            .map(|item| self.visit_block_item(item))
+            .map(|i| i.yellow().to_string())
             .collect::<Vec<_>>()
-            .join("\n");
+            .join(", ");
+
+        let func_str = format!(
+            "{}({}) {}({}):\n{}",
+            self.indent_now(),
+            if function_decl.body.is_some() {
+                "DEF".red()
+            } else {
+                "DECL".red()
+            },
+            function_decl.name.blue(),
+            args,
+            body_str
+        );
         self.indent -= 1;
-        format!("{}():\n{}", function_def.name.blue(), body_str)
+        func_str
     }
 
     fn visit_var_decl(&mut self, var_decl: &VarDecl) -> String {
