@@ -634,7 +634,7 @@ impl<'a> Parser<'a> {
             Some(TokenType::KInt) => {
                 let decl = self.declaration()?;
                 let (token, decl_type) = match decl {
-                    BlockItem::FunctionDecl(func_decl) => (func_decl.name.1, "functiom"),
+                    BlockItem::FunctionDecl(func_decl) => (func_decl.name.1, "function"),
                     BlockItem::VarDecl(mut var_decl) => {
                         (var_decl.pop().unwrap().name.1, "variable")
                     }

@@ -283,7 +283,10 @@ impl ExprRefVisitor<Value> for GenerateTacky {
         let dest = self.new_var();
         let WithToken(name, name_tok) = match *call.name {
             Expr::Var(ref name) => name.clone(),
-            _ => unreachable!(),
+            _ => unreachable!(
+                "Expected Expr::Var for function name, but found: {:?}",
+                call.name
+            ),
         };
         let debug_info = DebugInfo::new(name_tok.line, format!("call `{name}`"));
         self.current_body.push(Instruction::FunctionCall {

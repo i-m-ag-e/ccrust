@@ -30,10 +30,11 @@ struct Cli {
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
-    let (pseudo_compile_to_object, pseudo_output) = if cli.files.len() > 1 {
+    // When multiple files are provided, force compilation to object files and ignore the output option
+    let (force_object_compilation, adjusted_output) = if cli.files.len() > 1 {
         (true, None)
     } else {
-        (cli.compile_to_object, cli.output.clone())
+        (cli.compile_to_object, cli.output.clone()) // Use provided options for a single file
     };
 
     let mut out_files = Vec::new();
@@ -82,8 +83,8 @@ fn main() -> std::io::Result<()> {
         let (_status, out_file) = assemble(
             &path,
             &asm_string,
-            &pseudo_output,
-            pseudo_compile_to_object,
+            &adjusted_output,
+            force_object_compilation,
             true,
             true,
         )?;
