@@ -146,14 +146,24 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
     }
 
     fn visit_function_call(&mut self, call: FunctionCall) -> ResolveResult<Expr> {
-        Ok(Expr::FunctionCall(FunctionCall {
-            name: call.name,
-            args: call
-                .args
-                .into_iter()
-                .map(|arg| arg.map(|e| self.visit_expr(e)).transpose())
-                .collect::<Result<Vec<_>, _>>()?,
-        }))
+        let Expr::Var(name) = *call.name else {
+            unreachable!()
+        };
+        if let Some(entry) = self.scope.lookup(&*name) {
+            Ok(Expr::FunctionCall(FunctionCall {
+                name: Box::new(Expr::Var(entry.name.clone())),
+                args: call
+                    .args
+                    .into_iter()
+                    .map(|arg| arg.map(|e| self.visit_expr(e)).transpose())
+                    .collect::<Result<Vec<_>, _>>()?,
+            }))
+        } else {
+            Err(ResolveError {
+                token: name.1,
+                error_type: ResolverErrorType::UndeclaredVariable,
+            })
+        }
     }
 
     fn visit_literal(&mut self, lit: WithToken<Literal>) -> ResolveResult<Expr> {
@@ -465,10 +475,6 @@ impl ASTVisitor for Resolver {
     }
 
     fn visit_var_decl(&mut self, var_decl: VarDecl) -> Self::VarDeclResult {
-        println!(
-            "scope stack: {:#?}, scope depth: {}\n",
-            self.scope, self.scope_depth
-        );
         match self.scope.get(&*var_decl.name) {
             Some(MapEntry {
                 name: WithToken(_, tok),

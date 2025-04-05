@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use crate::debug_info::DebugInfo;
 use crate::parser::ast::{self, BinaryOp, UnaryOp};
@@ -18,6 +18,15 @@ const REGULAR_BINARY_OPS: [BinaryOp; 11] = [
     BinaryOp::RShift,
     BinaryOp::And,
     BinaryOp::Or,
+];
+
+const ARG_REGISTERS: [Register; 6] = [
+    Register::RDI,
+    Register::RSI,
+    Register::RDX,
+    Register::RCX,
+    Register::R8,
+    Register::R9,
 ];
 
 macro_rules! replace_pseudo_operand {
@@ -76,27 +85,30 @@ impl Program {
             let mut pseudo_map = HashMap::new();
             for inst in def.body.iter_mut() {
                 match inst {
-                    Instruction::Mov { src, dest, .. } => {
-                        replace_pseudo_operand!(self, src, pseudo_map);
-                        replace_pseudo_operand!(self, dest, pseudo_map);
-                    }
-                    Instruction::Unary(_, operand, _) => {
-                        replace_pseudo_operand!(self, operand, pseudo_map);
-                    }
                     Instruction::Binary(_, lhs, rhs, _) => {
                         replace_pseudo_operand!(self, lhs, pseudo_map);
                         replace_pseudo_operand!(self, rhs, pseudo_map);
-                    }
-                    Instruction::Idiv(operand, _) => {
-                        replace_pseudo_operand!(self, operand, pseudo_map);
-                        replace_pseudo_operand!(self, operand, pseudo_map);
                     }
                     Instruction::Cmp(op1, op2, _) => {
                         replace_pseudo_operand!(self, op1, pseudo_map);
                         replace_pseudo_operand!(self, op2, pseudo_map);
                     }
+                    Instruction::Idiv(operand, _) => {
+                        replace_pseudo_operand!(self, operand, pseudo_map);
+                        replace_pseudo_operand!(self, operand, pseudo_map);
+                    }
+                    Instruction::Mov { src, dest, .. } => {
+                        replace_pseudo_operand!(self, src, pseudo_map);
+                        replace_pseudo_operand!(self, dest, pseudo_map);
+                    }
+                    Instruction::Push(op, _) => {
+                        replace_pseudo_operand!(self, op, pseudo_map);
+                    }
                     Instruction::SetCC(_, op, _) => {
                         replace_pseudo_operand!(self, op, pseudo_map);
+                    }
+                    Instruction::Unary(_, operand, _) => {
+                        replace_pseudo_operand!(self, operand, pseudo_map);
                     }
                     _ => {}
                 };
@@ -110,10 +122,15 @@ impl Program {
     fn alloc_stack_and_resolve_stack_ops(&mut self) {
         for def in self.defs.iter_mut() {
             if def.stack_size > 0 {
+                let stack_size_16 = if def.stack_size % 16 != 0 {
+                    def.stack_size + (16 - def.stack_size % 16)
+                } else {
+                    def.stack_size
+                };
                 def.body.insert(
                     0,
                     Instruction::AllocateStack(
-                        def.stack_size,
+                        stack_size_16,
                         DebugInfo::new(0, format!("stack size: {}", def.stack_size)),
                     ),
                 );
@@ -122,24 +139,6 @@ impl Program {
             let mut index = 0;
             while index < def.body.len() {
                 match def.body[index].clone() {
-                    Instruction::Mov {
-                        src: Operand::Stack(src),
-                        dest: Operand::Stack(dest),
-                        debug_info,
-                    } => {
-                        replace_instruction!(def.body; [index] =>
-                            Instruction::Mov {
-                                src: Operand::Stack(src),
-                                dest: Operand::Reg(Register::R10),
-                                debug_info: debug_info.more_info(format!("(stack mov {0} -> {1}) {0} -> %r10 (temp)", src, dest)),
-                            },
-                            Instruction::Mov {
-                                src: Operand::Reg(Register::R10),
-                                dest: Operand::Stack(dest),
-                                debug_info: debug_info.with_more_info(format!("(stack mov {0} -> {1}) %r10 -> {1}", src, dest)),
-                            }
-                        );
-                    }
                     Instruction::Binary(
                         op,
                         Operand::Stack(val),
@@ -216,6 +215,24 @@ impl Program {
                             Instruction::Cmp(op1, Operand::Reg(Register::R11), debug_info.with_more_info("cmp with imm".to_string()))
                         );
                     }
+                    Instruction::Mov {
+                        src: Operand::Stack(src),
+                        dest: Operand::Stack(dest),
+                        debug_info,
+                    } => {
+                        replace_instruction!(def.body; [index] =>
+                            Instruction::Mov {
+                                src: Operand::Stack(src),
+                                dest: Operand::Reg(Register::R10),
+                                debug_info: debug_info.more_info(format!("(stack mov {0} -> {1}) {0} -> %r10 (temp)", src, dest)),
+                            },
+                            Instruction::Mov {
+                                src: Operand::Reg(Register::R10),
+                                dest: Operand::Stack(dest),
+                                debug_info: debug_info.with_more_info(format!("(stack mov {0} -> {1}) %r10 -> {1}", src, dest)),
+                            }
+                        );
+                    }
                     _ => {}
                 }
                 index += 1;
@@ -259,6 +276,32 @@ impl FunctionDef {
 impl From<&tacky::FunctionDef> for FunctionDef {
     fn from(function_def: &tacky::FunctionDef) -> Self {
         let mut body = Vec::new();
+
+        for (i, param) in function_def.params.iter().enumerate() {
+            let param = Operand::PseudoReg(param.clone());
+
+            if i < ARG_REGISTERS.len() {
+                let reg = ARG_REGISTERS[i];
+                body.push(Instruction::Mov {
+                    src: Operand::Reg(reg),
+                    dest: param,
+                    debug_info: DebugInfo::new(
+                        0,
+                        format!("transfer argument {i} onto function stack"),
+                    ),
+                });
+            } else {
+                body.push(Instruction::Mov {
+                    src: Operand::Stack(16 + (i as i32 - 6) * 8),
+                    dest: param,
+                    debug_info: DebugInfo::new(
+                        0,
+                        format!("transfer argument {i} onto function stack"),
+                    ),
+                });
+            }
+        }
+
         function_def
             .body
             .iter()
@@ -347,8 +390,10 @@ impl From<&BinaryOp> for CondCode {
 pub enum Instruction {
     AllocateStack(i32, DebugInfo),
     Binary(BinaryOp, Operand, Operand, DebugInfo),
+    Call(String, DebugInfo),
     Cmp(Operand, Operand, DebugInfo),
     Cqo(DebugInfo),
+    DeallocateStack(i32, DebugInfo),
     Idiv(Operand, DebugInfo),
     Jmp(String, DebugInfo),
     JmpCC(CondCode, String, DebugInfo),
@@ -358,6 +403,7 @@ pub enum Instruction {
         dest: Operand,
         debug_info: DebugInfo,
     },
+    Push(Operand, DebugInfo),
     Ret(DebugInfo),
     SetCC(CondCode, Operand, DebugInfo),
     Unary(UnaryOp, Operand, DebugInfo),
@@ -367,6 +413,31 @@ impl Instruction {
     fn to_asm_string(&self) -> String {
         match self {
             Instruction::AllocateStack(n, info) => format!("subq\t${}, %rsp # {}", n, info),
+            Instruction::Binary(op, val, src, info) => {
+                format!(
+                    "{:<4}\t{}, {}\t# {}",
+                    binary_op_to_asm(op),
+                    val.to_asm_string(),
+                    src.to_asm_string(),
+                    info
+                )
+            }
+            Instruction::Call(name, info) => {
+                format!("call\t{}\t# {}", name, info)
+            }
+            Instruction::Cmp(lhs, rhs, info) => {
+                format!(
+                    "cmpq\t{}, {}\t# {}",
+                    lhs.to_asm_string(),
+                    rhs.to_asm_string(),
+                    info
+                )
+            }
+            Instruction::Cqo(info) => format!("cqo\t# {}", info),
+            Instruction::DeallocateStack(n, info) => format!("addq\t${}, %rsp # {}", n, info),
+            Instruction::Jmp(target, info) => format!("jmp\t\t{}\t# {}", target, info),
+            Instruction::JmpCC(op, target, info) => format!("j{}\t{}\t# {}", op, target, info),
+            Instruction::Label(label, info) => format!("\n{}:\t# {}", label, info),
             Instruction::Mov {
                 src,
                 dest,
@@ -379,38 +450,9 @@ impl Instruction {
                     debug_info
                 )
             }
-            Instruction::Unary(op, operand, info) => {
-                format!(
-                    "{}\t{}\t# {}",
-                    unary_op_to_asm(op),
-                    operand.to_asm_string(),
-                    info
-                )
-            }
-            Instruction::Binary(op, val, src, info) => {
-                format!(
-                    "{:<4}\t{}, {}\t# {}",
-                    binary_op_to_asm(op),
-                    val.to_asm_string(),
-                    src.to_asm_string(),
-                    info
-                )
-            }
-            Instruction::Cmp(lhs, rhs, info) => {
-                format!(
-                    "cmpq\t{}, {}\t# {}",
-                    lhs.to_asm_string(),
-                    rhs.to_asm_string(),
-                    info
-                )
-            }
-            Instruction::Label(label, info) => format!("\n{}:\t# {}", label, info),
-            Instruction::Jmp(target, info) => format!("jmp\t\t{}\t# {}", target, info),
-            Instruction::JmpCC(op, target, info) => format!("j{}\t{}\t# {}", op, target, info),
             Instruction::SetCC(op, dest, info) => {
                 format!("set{}\t{}\t# {}", op, dest.to_asm_string(), info)
             }
-            Instruction::Cqo(info) => format!("cqo\t# {}", info),
             Instruction::Idiv(operand, info) => {
                 format!("idivq\t{}\t# {}", operand.to_asm_string(), info)
             }
@@ -419,6 +461,17 @@ impl Instruction {
                 format!("popq\t%rbp\t# {}", info),
                 format!("ret\t# {}", info),
             ]),
+            Instruction::Push(value, info) => {
+                format!("pushq\t{}\t# {}", value.to_asm_string(), info)
+            }
+            Instruction::Unary(op, operand, info) => {
+                format!(
+                    "{}\t{}\t# {}",
+                    unary_op_to_asm(op),
+                    operand.to_asm_string(),
+                    info
+                )
+            }
         }
     }
 
@@ -563,6 +616,74 @@ impl Instruction {
             tacky::Instruction::Label(label, debug_info) => {
                 body.push(Instruction::Label(label.clone(), debug_info.clone()))
             }
+
+            tacky::Instruction::FunctionCall {
+                name,
+                args,
+                dest,
+                debug_info,
+            } => {
+                let (register_args, stack_args) = args
+                    .split_at_checked(ARG_REGISTERS.len())
+                    .map(|(r, s)| (r.to_vec(), s.to_vec()))
+                    .unwrap_or((args.clone(), vec![]));
+                let stack_padding = (stack_args.len() as i32 % 2) * 8;
+
+                if stack_padding != 0 {
+                    body.push(Instruction::AllocateStack(
+                        stack_padding,
+                        debug_info.more_info("stack padding".to_string()),
+                    ));
+                }
+
+                for (i, tacky_arg) in register_args.iter().enumerate() {
+                    let arg = Operand::from(tacky_arg);
+                    let reg = ARG_REGISTERS[i];
+                    body.push(Instruction::Mov {
+                        src: arg,
+                        dest: Operand::Reg(reg),
+                        debug_info: debug_info.more_info(format!("load argument {i} into {reg}")),
+                    });
+                }
+
+                for (i, tacky_arg) in stack_args.iter().rev().enumerate() {
+                    let arg = Operand::from(tacky_arg);
+                    let desc = debug_info.more_info(format!("push argument {i}"));
+                    match arg {
+                        Operand::Reg(_) | Operand::Imm(_) => {
+                            body.push(Instruction::Push(arg, desc));
+                        }
+                        _ => {
+                            body.push(Instruction::Mov {
+                                src: arg,
+                                dest: Operand::Reg(Register::RAX),
+                                debug_info: desc.clone(),
+                            });
+                            body.push(Instruction::Push(Operand::Reg(Register::RAX), desc));
+                        }
+                    }
+                }
+
+                let tacky::Value::Var(name) = name else {
+                    unreachable!()
+                };
+                body.push(Instruction::Call(name.clone(), debug_info.clone()));
+
+                let bytes_to_remove = stack_args.len() as i32 * 8 + stack_padding;
+                if bytes_to_remove != 0 {
+                    body.push(Instruction::DeallocateStack(
+                        bytes_to_remove,
+                        debug_info.more_info("deallocate stack".to_string()),
+                    ));
+                }
+
+                let dest = Operand::from(dest);
+                body.push(Instruction::Mov {
+                    src: Operand::Reg(Register::RAX),
+                    dest,
+                    debug_info: debug_info.clone(),
+                });
+            }
         }
     }
 }
@@ -604,7 +725,12 @@ impl From<&tacky::Value> for Operand {
 pub enum Register {
     AL,
     RAX,
+    RCX,
+    RDI,
     RDX,
+    RSI,
+    R8,
+    R9,
     R10,
     R11,
 }
@@ -617,7 +743,12 @@ impl Display for Register {
             match self {
                 Register::AL => "al",
                 Register::RAX => "rax",
+                Register::RCX => "rcx",
+                Register::RDI => "rdi",
                 Register::RDX => "rdx",
+                Register::RSI => "rsi",
+                Register::R8 => "r8",
+                Register::R9 => "r9",
                 Register::R10 => "r10",
                 Register::R11 => "r11",
             }

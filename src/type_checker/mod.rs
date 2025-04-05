@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use thiserror::Error;
 
 use crate::{
@@ -11,7 +9,8 @@ use crate::{
 pub mod r#type;
 use r#type::Type;
 
-pub type SymbolTable = HashMap<String, Type>;
+pub mod symbol_table;
+use symbol_table::{SymbolTable, SymbolTableEntry};
 
 #[derive(Debug, Error)]
 #[error("Type error at {token:?}: {kind}")]
@@ -23,11 +22,26 @@ pub struct TypeCheckerError {
 
 #[derive(Debug, Error)]
 pub enum TypeCheckerErrorKind {
-    #[error("type mismatch: expected `{expected}`, got `{got}`")]
-    TypeMismatch { expected: Type, got: Type },
+    #[error("duplicate definitions of function (previously defined at {prev:?})")]
+    DuplicateDefFunction { prev: Token },
+
+    #[error("function called with wrong number of arguments; expeected {expected}, got {got}")]
+    FunctionCallWrongNumberOfArgs { expected: usize, got: usize },
+
+    #[error(
+        "function redeclared with different type\n\tnew declaration hsa type {new}, but previously declared as `{prev}` at {prev_token:?}"
+    )]
+    FunctionRedeclaredWithDifferentType {
+        prev: Type,
+        new: Type,
+        prev_token: Token,
+    },
 
     #[error("value of type {0} cannot be used as an lvalue")]
     TypeCannotBeLValue(Type),
+
+    #[error("type mismatch: expected `{expected}`, got `{got}`")]
+    TypeMismatch { expected: Type, got: Type },
 }
 
 pub struct TypeChecker {
@@ -43,12 +57,27 @@ impl TypeChecker {
         }
     }
 
-    pub fn add_symbol(&mut self, name: String, ty: Type) {
-        self.symbol_table.insert(name, ty);
+    pub fn add_symbol(&mut self, name: WithToken<String>, ty: Type, defined: bool) {
+        self.symbol_table.insert(
+            name.0,
+            SymbolTableEntry {
+                ty,
+                token: name.1,
+                defined,
+            },
+        );
     }
 
-    pub fn get_symbol(&self, name: &str) -> Option<&Type> {
+    pub fn get_symbol(&self, name: &str) -> Option<&SymbolTableEntry> {
         self.symbol_table.get(name)
+    }
+
+    pub fn get_symbol_mut(&mut self, name: &str) -> Option<&mut SymbolTableEntry> {
+        self.symbol_table.get_mut(name)
+    }
+
+    pub fn get_symbol_type(&self, name: &str) -> Option<&Type> {
+        self.get_symbol(name).map(|entry| &entry.ty)
     }
 }
 
@@ -60,7 +89,7 @@ impl ExprRefVisitor<TypeCheckerResult<Type>> for TypeChecker {
 
         let rhs_ty = self.visit_expr(&assign.rhs)?;
 
-        if let Some(lhs_ty) = self.get_symbol(name) {
+        if let Some(lhs_ty) = self.get_symbol_type(name) {
             match lhs_ty {
                 Type::Function { .. } => Err(TypeCheckerError {
                     token: name.1.clone(),
@@ -76,8 +105,7 @@ impl ExprRefVisitor<TypeCheckerResult<Type>> for TypeChecker {
                 _ => Ok(rhs_ty),
             }
         } else {
-            self.add_symbol(name.0.clone(), rhs_ty.clone());
-            Ok(rhs_ty)
+            unreachable!("variable must have a type before assigning")
         }
     }
 
@@ -141,11 +169,9 @@ impl ExprRefVisitor<TypeCheckerResult<Type>> for TypeChecker {
             if params.len() != call.args.len() {
                 return Err(TypeCheckerError {
                     token: name.1.clone(),
-                    kind: TypeCheckerErrorKind::TypeMismatch {
-                        expected: func_ty,
-                        got: Type::Function {
-                            params: call.args.iter().map(|_| Type::Int).collect(),
-                        },
+                    kind: TypeCheckerErrorKind::FunctionCallWrongNumberOfArgs {
+                        expected: params.len(),
+                        got: call.args.len(),
                     },
                 });
             }
@@ -200,7 +226,7 @@ impl ExprRefVisitor<TypeCheckerResult<Type>> for TypeChecker {
     }
 
     fn visit_var(&mut self, name: &WithToken<String>) -> TypeCheckerResult<Type> {
-        if let Some(ty) = self.get_symbol(&name.0) {
+        if let Some(ty) = self.get_symbol_type(&name.0) {
             Ok(ty.clone())
         } else {
             unreachable!("variable must be resolved")
@@ -378,14 +404,49 @@ impl ASTRefVisitor for TypeChecker {
     }
 
     fn visit_function_decl(&mut self, function_def: &FunctionDecl) -> Self::FuncDeclResult {
-        self.add_symbol(
-            function_def.name.0.clone(),
-            Type::Function {
-                params: function_def.params.iter().map(|_| Type::Int).collect(),
-            },
-        );
+        let func_ty = Type::Function {
+            params: function_def.params.iter().map(|_| Type::Int).collect(),
+        };
+
+        if let Some(old_decl) = self.get_symbol_mut(&function_def.name.0) {
+            if old_decl.ty != func_ty {
+                return Err(TypeCheckerError {
+                    token: function_def.name.1.clone(),
+                    kind: TypeCheckerErrorKind::FunctionRedeclaredWithDifferentType {
+                        prev: old_decl.ty.clone(),
+                        new: func_ty,
+                        prev_token: old_decl.token.clone(),
+                    },
+                });
+            }
+
+            if old_decl.defined && function_def.body.is_some() {
+                return Err(TypeCheckerError {
+                    token: function_def.name.1.clone(),
+                    kind: TypeCheckerErrorKind::DuplicateDefFunction {
+                        prev: old_decl.token.clone(),
+                    },
+                });
+            }
+
+            if function_def.body.is_some() {
+                old_decl.defined = true;
+            }
+        } else {
+            println!("Declared {:?}", *function_def.name);
+            self.add_symbol(
+                function_def.name.clone(),
+                Type::Function {
+                    params: function_def.params.iter().map(|_| Type::Int).collect(),
+                },
+                function_def.body.is_some(),
+            );
+        }
 
         if let Some(ref body) = function_def.body {
+            for param in &function_def.params {
+                self.add_symbol(param.clone(), Type::Int, true);
+            }
             self.visit_compound(body)?;
         }
 
@@ -410,7 +471,7 @@ impl ASTRefVisitor for TypeChecker {
                 },
             })
         } else {
-            self.add_symbol(var_decl.name.0.clone(), ty);
+            self.add_symbol(var_decl.name.clone(), ty, true);
             Ok(())
         }
     }

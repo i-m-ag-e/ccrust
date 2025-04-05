@@ -9,6 +9,7 @@ use clap::Parser;
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "ccrust")]
@@ -29,6 +30,13 @@ struct Cli {
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
+    let (pseudo_compile_to_object, pseudo_output) = if cli.files.len() > 1 {
+        (true, None)
+    } else {
+        (cli.compile_to_object, cli.output.clone())
+    };
+
+    let mut out_files = Vec::new();
     for file in cli.files.iter() {
         let path = Path::new(file);
         let text = fs::read_to_string(path)?;
@@ -71,14 +79,36 @@ fn main() -> std::io::Result<()> {
         #[cfg(not(feature = "asm_gen"))]
         println!("{}\n{}:\n{}\n", "-".repeat(20), file, asm_string);
 
-        let _status = assemble(
+        let (_status, out_file) = assemble(
             &path,
             &asm_string,
-            &cli.output,
-            cli.compile_to_object,
+            &pseudo_output,
+            pseudo_compile_to_object,
             true,
             true,
         )?;
+        out_files.push(out_file);
+    }
+
+    if cli.files.len() > 0 && !cli.compile_to_object {
+        let mut command = Command::new("gcc");
+
+        command
+            .args(&out_files)
+            .args(["-o", cli.output.as_deref().unwrap_or("a.out")]);
+        println!("Compiling with command {:?}", command);
+        let status = command.spawn()?.wait()?;
+        if status.success() {
+            println!("Compiled successfully");
+        } else {
+            eprintln!("Failed to compile");
+        }
+
+        if !cli.compile_to_object {
+            for out_file in out_files {
+                fs::remove_file(out_file)?;
+            }
+        }
     }
 
     Ok(())

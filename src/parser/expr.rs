@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::lexer::token::Token;
 
-use super::ast::{Identifier, WithToken};
+use super::ast::WithToken;
 
 #[derive(Debug, Clone)]
 pub enum Expr {
