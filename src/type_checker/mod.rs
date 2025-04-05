@@ -461,17 +461,22 @@ impl ASTRefVisitor for TypeChecker {
     }
 
     fn visit_var_decl(&mut self, var_decl: &VarDecl) -> Self::VarDeclResult {
-        let ty = self.visit_expr(var_decl.init.as_ref().unwrap())?;
-        if ty != var_decl.ty {
-            Err(TypeCheckerError {
-                token: var_decl.name.1.clone(),
-                kind: TypeCheckerErrorKind::TypeMismatch {
-                    expected: var_decl.ty.clone(),
-                    got: ty,
-                },
-            })
+        if let Some(ref init) = var_decl.init {
+            let ty = self.visit_expr(init)?;
+            if ty != var_decl.ty {
+                Err(TypeCheckerError {
+                    token: var_decl.name.1.clone(),
+                    kind: TypeCheckerErrorKind::TypeMismatch {
+                        expected: var_decl.ty.clone(),
+                        got: ty,
+                    },
+                })
+            } else {
+                self.add_symbol(var_decl.name.clone(), ty, true);
+                Ok(())
+            }
         } else {
-            self.add_symbol(var_decl.name.clone(), ty, true);
+            self.add_symbol(var_decl.name.clone(), var_decl.ty.clone(), false);
             Ok(())
         }
     }

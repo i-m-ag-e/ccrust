@@ -91,7 +91,7 @@ fn main() -> std::io::Result<()> {
         out_files.push(out_file);
     }
 
-    if cli.files.len() > 0 && !cli.compile_to_object {
+    if cli.files.len() > 1 && !cli.compile_to_object {
         let mut command = Command::new("gcc");
 
         command
