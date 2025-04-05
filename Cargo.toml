@@ -15,6 +15,7 @@ paste = "1.0.15"
 thiserror = "1.0.63"
 
 [features]
-default = ["resolve", "asm_gen"]
+default = ["resolve", "tacky_gen", "asm_gen"]
 resolve = []
 asm_gen = []
+tacky_gen = []

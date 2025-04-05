@@ -3,8 +3,8 @@ use std::fmt::Display;
 use crate::{
     debug_info::DebugInfo,
     parser::ast::{
-        self, ASTRefVisitor, BinaryOp, BlockItem, BreakStmt, ExprRefVisitor, ForStmtInitializer,
-        Integral, Literal, StmtRefVisitor, WithToken,
+        self, ASTRefVisitor, BinaryOp, BlockItem, BreakStmt, Expr, ExprRefVisitor,
+        ForStmtInitializer, Integral, Literal, StmtRefVisitor, WithToken,
     },
 };
 
@@ -42,6 +42,7 @@ pub struct Program(pub Vec<FunctionDef>);
 #[derive(Debug)]
 pub struct FunctionDef {
     pub name: String,
+    pub params: Vec<String>,
     pub body: Vec<Instruction>,
 }
 
@@ -55,6 +56,12 @@ pub enum Instruction {
     Copy {
         src: Value,
         dst: Value,
+        debug_info: DebugInfo,
+    },
+    FunctionCall {
+        name: Value,
+        args: Vec<Value>,
+        dest: Value,
         debug_info: DebugInfo,
     },
     Jump(Target, DebugInfo),
@@ -269,6 +276,26 @@ impl ExprRefVisitor<Value> for GenerateTacky {
         }
 
         dst
+    }
+
+    fn visit_function_call(&mut self, call: &ast::FunctionCall) -> Value {
+        let args: Vec<Value> = call.args.iter().map(|arg| self.visit_expr(&arg)).collect();
+        let dest = self.new_var();
+        let WithToken(name, name_tok) = match *call.name {
+            Expr::Var(ref name) => name.clone(),
+            _ => unreachable!(
+                "Expected Expr::Var for function name, but found: {:?}",
+                call.name
+            ),
+        };
+        let debug_info = DebugInfo::new(name_tok.line, format!("call `{name}`"));
+        self.current_body.push(Instruction::FunctionCall {
+            name: Value::Var(name),
+            args,
+            dest: dest.clone(),
+            debug_info,
+        });
+        dest
     }
 
     fn visit_literal(&mut self, literal: &ast::WithToken<Literal>) -> Value {
@@ -630,7 +657,7 @@ impl StmtRefVisitor<()> for GenerateTacky {
 impl ASTRefVisitor for GenerateTacky {
     type BlockItemResult = ();
     type ExprResult = Value;
-    type FuncDefResult = FunctionDef;
+    type FuncDeclResult = Option<FunctionDef>;
     type ProgramResult = Program;
     type StmtResult = ();
     type VarDeclResult = ();
@@ -639,25 +666,31 @@ impl ASTRefVisitor for GenerateTacky {
         match block_item {
             BlockItem::Stmt(stmt) => self.visit_stmt(stmt),
             BlockItem::VarDecl(decls) => decls.iter().for_each(|decl| self.visit_var_decl(decl)),
+            BlockItem::FunctionDecl(_) => {}
         };
     }
 
-    fn visit_function_def(&mut self, function_def: &ast::FunctionDef) -> Self::FuncDefResult {
-        self.visit_compound(&function_def.body);
-        // self.current_body
-        //     .push(Instruction::Return(Value::Literal(Literal::Integral(Integral::Integer(0)))));
-        let body = std::mem::replace(&mut self.current_body, Vec::new());
-        FunctionDef {
-            name: function_def.name.0.clone(),
-            body,
-        }
+    fn visit_function_decl(&mut self, function_def: &ast::FunctionDecl) -> Self::FuncDeclResult {
+        function_def.body.as_ref().map(|body| {
+            self.visit_compound(body);
+            let body = std::mem::replace(&mut self.current_body, Vec::new());
+            FunctionDef {
+                name: function_def.name.0.clone(),
+                params: function_def
+                    .params
+                    .iter()
+                    .map(|param| param.0.clone())
+                    .collect(),
+                body,
+            }
+        })
     }
 
     fn visit_program(&mut self, program: &ast::Program) -> Self::ProgramResult {
         let funs = program
             .0
             .iter()
-            .map(|f| self.visit_function_def(f))
+            .filter_map(|f| self.visit_function_decl(f))
             .collect();
         Program(funs)
     }

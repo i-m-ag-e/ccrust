@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "asm_gen"), allow(unused_imports))]
+
 use std::{
     os::unix::process::ExitStatusExt,
     path::Path,
@@ -11,7 +13,10 @@ use parser::{
 };
 use std::fs;
 
-#[cfg(feature = "asm_gen")]
+#[cfg(feature = "resolve")]
+use type_checker::TypeChecker;
+
+#[cfg(feature = "tacky_gen")]
 use tacky::GenerateTacky;
 
 pub mod debug_info;
@@ -22,11 +27,16 @@ pub mod parser;
 pub mod resolver;
 #[cfg(feature = "resolve")]
 use resolver::Resolver;
+#[cfg(feature = "resolve")]
+pub mod type_checker;
+
 #[cfg(feature = "asm_gen")]
 pub mod asm;
-#[cfg(feature = "asm_gen")]
+
+#[cfg(feature = "tacky_gen")]
 pub mod tacky;
 
+#[cfg_attr(not(feature = "asm_gen"), allow(unused_variables))]
 pub fn compile(input: &str, debug: bool) -> anyhow::Result<String> {
     let lexer = lexer::Lexer::new(input);
     let tokens = lexer.collect::<Result<Vec<_>, _>>()?;
@@ -36,22 +46,34 @@ pub fn compile(input: &str, debug: bool) -> anyhow::Result<String> {
     let program = parser.program()?;
 
     #[cfg(feature = "resolve")]
-    let program = Resolver::new().visit_program(program)?;
+    let program = {
+        let resolved_prog = Resolver::new().visit_program(program)?;
+        TypeChecker::new().visit_program(&resolved_prog)?;
+        resolved_prog
+    };
+
+    #[cfg(feature = "tacky_gen")]
+    let tacky_prog = {
+        let tacky_prog = GenerateTacky::new().visit_program(&program);
+        if debug {
+            println!("Tacky: {tacky_prog:#?}");
+        }
+        tacky_prog
+    };
 
     #[cfg(feature = "asm_gen")]
     {
-        let tacky_prog = GenerateTacky::new().visit_program(&program);
         let asm = asm::Program::from(&tacky_prog);
         let asm_string = asm.to_asm_string();
 
         if debug {
-            println!("Tacky: {tacky_prog:#?}");
             println!("ASM: {asm:#?}");
             println!("ASM:\n{}", asm_string);
         }
 
         return Ok(asm_string);
     }
+
     Ok(PrettyPrint::new().visit_program(&program))
 }
 
@@ -60,14 +82,21 @@ pub fn assemble(
     file: &Path,
     asm: &str,
     output: &Option<String>,
+    to_object: bool,
     keep_asm: bool,
     debug: bool,
-) -> std::io::Result<ExitStatus> {
+) -> std::io::Result<(ExitStatus, String)> {
     #[cfg(feature = "asm_gen")]
     {
         let asm_file_path = file.with_extension("s");
         let out_file = if let Some(out) = output {
             out.clone()
+        } else if to_object {
+            asm_file_path
+                .with_extension("o")
+                .to_str()
+                .unwrap()
+                .to_string()
         } else {
             asm_file_path
                 .with_extension("")
@@ -89,6 +118,10 @@ pub fn assemble(
             .arg("-g")
             .args(["-o", &out_file]);
 
+        if to_object {
+            command.arg("-c");
+        }
+
         if debug {
             println!("Assembling with command {:?}", command)
         };
@@ -103,11 +136,11 @@ pub fn assemble(
             eprintln!("Failed to compile");
         }
 
-        Ok(exit_status)
+        Ok((exit_status, out_file))
     }
 
     #[cfg(not(feature = "asm_gen"))]
     {
-        Ok(ExitStatus::from_raw(0))
+        Ok((ExitStatus::from_raw(0), out_file))
     }
 }

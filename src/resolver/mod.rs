@@ -1,7 +1,8 @@
 mod scoped_var_map;
 
 use crate::lexer::token::Token;
-use crate::parser::ast::*;
+use crate::parser::ast::{self, *};
+use crate::type_checker::r#type::Type;
 use scoped_var_map::ScopedVarMap;
 use thiserror::Error;
 
@@ -24,15 +25,34 @@ pub enum ResolverErrorType {
     #[error("Duplicate variable in scope (previous declaration on {prev_token:?}")]
     DuplicateVariable { prev_token: Token },
 
-    #[error("Undeclared variable")]
-    UndeclaredVariable,
-
     #[error("Invalid lvalue for assignment")]
     InvalidLValue,
+
+    #[error("symbol redeclared as different kind of value (previously declared {prev_token:?} of kind `{prev_kind}`, now declared as `{new_kind}`)")]
+    RedeclaredAsDifferentKind {
+        prev_token: Token,
+        prev_kind: &'static str,
+        new_kind: &'static str,
+    },
+
+    #[error("Undeclared variable")]
+    UndeclaredVariable,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Linkage {
+    External,
+    Internal,
+    None,
+}
+
+#[derive(Debug)]
+pub struct MapEntry {
+    pub name: WithToken<String>,
+    pub linkage: Linkage,
 }
 
 pub type ScopeDepth = i32;
-pub type MapEntry = WithToken<String>;
 
 pub struct Resolver {
     scope: ScopedVarMap,
@@ -125,6 +145,27 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
         }))
     }
 
+    fn visit_function_call(&mut self, call: FunctionCall) -> ResolveResult<Expr> {
+        let Expr::Var(name) = *call.name else {
+            unreachable!()
+        };
+        if let Some(entry) = self.scope.lookup(&*name) {
+            Ok(Expr::FunctionCall(FunctionCall {
+                name: Box::new(Expr::Var(entry.name.clone())),
+                args: call
+                    .args
+                    .into_iter()
+                    .map(|arg| arg.map(|e| self.visit_expr(e)).transpose())
+                    .collect::<Result<Vec<_>, _>>()?,
+            }))
+        } else {
+            Err(ResolveError {
+                token: name.1,
+                error_type: ResolverErrorType::UndeclaredVariable,
+            })
+        }
+    }
+
     fn visit_literal(&mut self, lit: WithToken<Literal>) -> ResolveResult<Expr> {
         Ok(Expr::Literal(lit))
     }
@@ -138,8 +179,8 @@ impl ExprVisitor<ResolveResult<Expr>> for Resolver {
     }
 
     fn visit_var(&mut self, name: WithToken<String>) -> ResolveResult<Expr> {
-        if let Some(val) = self.scope.lookup(&**name) {
-            Ok(Expr::Var(val.clone()))
+        if let Some(entry) = self.scope.lookup(&**name) {
+            Ok(Expr::Var(entry.name.clone()))
         } else {
             Err(ResolveError {
                 token: name.1,
@@ -344,7 +385,7 @@ impl StmtVisitor<ResolveResult<Stmt>> for Resolver {
 impl ASTVisitor for Resolver {
     type BlockItemResult = ResolveResult<BlockItem>;
     type ExprResult = ResolveResult<Expr>;
-    type FuncDefResult = ResolveResult<FunctionDef>;
+    type FuncDeclResult = ResolveResult<FunctionDecl>;
     type ProgramResult = ResolveResult<Program>;
     type StmtResult = ResolveResult<Stmt>;
     type VarDeclResult = ResolveResult<VarDecl>;
@@ -358,34 +399,98 @@ impl ASTVisitor for Resolver {
                     .map(|decl| self.visit_var_decl(decl))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            BlockItem::FunctionDecl(func_decl) => {
+                BlockItem::FunctionDecl(self.visit_function_decl(func_decl)?)
+            }
         })
     }
 
-    fn visit_function_def(&mut self, function_def: FunctionDef) -> Self::FuncDefResult {
-        let Stmt::Compound(body) = self.visit_compound(function_def.body)? else {
-            unreachable!();
-        };
-        Ok(FunctionDef {
-            name: function_def.name,
+    fn visit_function_decl(&mut self, function_decl: FunctionDecl) -> Self::FuncDeclResult {
+        if let Some(prev_entry) = self.scope.lookup(&*function_decl.name.0) {
+            if prev_entry.linkage == Linkage::None {
+                return Err(ResolveError {
+                    token: function_decl.name.1,
+                    error_type: ResolverErrorType::RedeclaredAsDifferentKind {
+                        prev_token: prev_entry.name.1.clone(),
+                        prev_kind: "variable",
+                        new_kind: "function",
+                    },
+                });
+            }
+        }
+
+        self.scope.insert(
+            function_decl.name.0.clone(),
+            MapEntry {
+                name: function_decl.name.clone(),
+                linkage: Linkage::Internal,
+            },
+        );
+
+        self.begin_scope();
+        let params = function_decl
+            .params
+            .into_iter()
+            .map(|p| {
+                self.visit_var_decl(ast::VarDecl {
+                    name: p,
+                    init: None,
+                    ty: Type::Int,
+                })
+                .map(|decl| decl.name)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let body = function_decl
+            .body
+            .map(|stmt| {
+                self.visit_compound(CompoundStmt {
+                    introduce_scope: false,
+                    ..stmt
+                })
+            })
+            .transpose()?;
+        let body = body.map(|stmt| {
+            let Stmt::Compound(cs) = stmt else {
+                unreachable!()
+            };
+            cs
+        });
+
+        self.end_scope();
+        Ok(FunctionDecl {
+            name: function_decl.name,
+            params,
             body,
         })
     }
+
     fn visit_program(&mut self, program: Program) -> Self::ProgramResult {
         let body = program
             .0
             .into_iter()
-            .map(|f| self.visit_function_def(f))
+            .map(|f| self.visit_function_decl(f))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Program(body))
     }
 
     fn visit_var_decl(&mut self, var_decl: VarDecl) -> Self::VarDeclResult {
-        println!(
-            "scope stack: {:#?}, scope depth: {}\n",
-            self.scope, self.scope_depth
-        );
         match self.scope.get(&*var_decl.name) {
-            Some(WithToken(_, tok)) => {
+            Some(MapEntry {
+                name: WithToken(_, tok),
+                linkage,
+            }) => {
+                if *linkage != Linkage::None {
+                    return Err(ResolveError {
+                        token: tok.clone(),
+                        error_type: ResolverErrorType::RedeclaredAsDifferentKind {
+                            prev_token: tok.clone(),
+                            prev_kind: "function",
+                            new_kind: "variable",
+                        },
+                    });
+                }
+
                 let prev_token = tok.clone();
                 let token = var_decl.name.1;
                 Err(ResolveError {
@@ -397,7 +502,13 @@ impl ASTVisitor for Resolver {
                 let old_name = var_decl.name;
                 let new_name = WithToken(self.make_unique(&old_name.0), old_name.1);
 
-                self.scope.insert(old_name.0, new_name.clone());
+                self.scope.insert(
+                    old_name.0,
+                    MapEntry {
+                        name: new_name.clone(),
+                        linkage: Linkage::None,
+                    },
+                );
 
                 let new_init = var_decl
                     .init
@@ -406,6 +517,7 @@ impl ASTVisitor for Resolver {
                 Ok(VarDecl {
                     name: new_name,
                     init: new_init,
+                    ty: var_decl.ty,
                 })
             }
         }

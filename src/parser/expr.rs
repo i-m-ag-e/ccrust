@@ -10,6 +10,7 @@ pub enum Expr {
     Binary(Binary),
     Comma(Comma),
     Conditional(Conditional),
+    FunctionCall(FunctionCall),
     Literal(WithToken<Literal>),
     Unary(Unary),
     Var(WithToken<String>),
@@ -46,6 +47,12 @@ pub struct Conditional {
     pub else_expr: Box<Expr>,
     pub qmark: Token,
     pub colon: Token,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionCall {
+    pub name: Box<Expr>,
+    pub args: Vec<WithToken<Expr>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +156,7 @@ pub trait ExprRefVisitor<R> {
     fn visit_binary(&mut self, expr: &Binary) -> R;
     fn visit_comma(&mut self, expr: &Comma) -> R;
     fn visit_conditional(&mut self, expr: &Conditional) -> R;
+    fn visit_function_call(&mut self, call: &FunctionCall) -> R;
     fn visit_literal(&mut self, literal: &WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: &Unary) -> R;
     fn visit_var(&mut self, name: &WithToken<String>) -> R;
@@ -159,6 +167,7 @@ pub trait ExprVisitor<R> {
     fn visit_binary(&mut self, expr: Binary) -> R;
     fn visit_comma(&mut self, expr: Comma) -> R;
     fn visit_conditional(&mut self, expr: Conditional) -> R;
+    fn visit_function_call(&mut self, call: FunctionCall) -> R;
     fn visit_literal(&mut self, literal: WithToken<Literal>) -> R;
     fn visit_unary(&mut self, expr: Unary) -> R;
     fn visit_var(&mut self, name: WithToken<String>) -> R;

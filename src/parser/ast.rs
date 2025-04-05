@@ -1,6 +1,7 @@
 pub use super::expr::*;
 pub use super::stmt::*;
 use crate::lexer::token::Token;
+use crate::type_checker::r#type::Type;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,16 +65,20 @@ impl<T> DerefMut for WithToken<T> {
 }
 
 #[derive(Debug)]
-pub struct Program(pub Vec<FunctionDef>);
+pub struct Program(pub Vec<FunctionDecl>);
+
+pub type Identifier = WithToken<String>;
 
 #[derive(Debug)]
-pub struct FunctionDef {
-    pub name: WithToken<String>,
-    pub body: CompoundStmt,
+pub struct FunctionDecl {
+    pub name: Identifier,
+    pub params: Vec<Identifier>,
+    pub body: Option<CompoundStmt>,
 }
 
 #[derive(Debug)]
 pub enum BlockItem {
+    FunctionDecl(FunctionDecl),
     Stmt(Stmt),
     VarDecl(Vec<VarDecl>),
 }
@@ -82,20 +87,21 @@ pub enum BlockItem {
 pub struct VarDecl {
     pub name: WithToken<String>,
     pub init: Option<Expr>,
+    pub ty: Type,
 }
 
 pub trait ASTRefVisitor:
     StmtRefVisitor<Self::StmtResult> + ExprRefVisitor<Self::ExprResult>
 {
     type ProgramResult;
-    type FuncDefResult;
+    type FuncDeclResult;
     type BlockItemResult;
     type VarDeclResult;
     type StmtResult;
     type ExprResult;
 
     fn visit_program(&mut self, program: &Program) -> Self::ProgramResult;
-    fn visit_function_def(&mut self, function_def: &FunctionDef) -> Self::FuncDefResult;
+    fn visit_function_decl(&mut self, function_def: &FunctionDecl) -> Self::FuncDeclResult;
 
     fn visit_block_item(&mut self, block_item: &BlockItem) -> Self::BlockItemResult;
 
@@ -124,6 +130,7 @@ pub trait ASTRefVisitor:
             Expr::Binary(binary) => self.visit_binary(binary),
             Expr::Comma(comma) => self.visit_comma(comma),
             Expr::Conditional(cond) => self.visit_conditional(cond),
+            Expr::FunctionCall(call) => self.visit_function_call(call),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),
             Expr::Var(name) => self.visit_var(name),
@@ -133,14 +140,14 @@ pub trait ASTRefVisitor:
 
 pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResult> {
     type ProgramResult;
-    type FuncDefResult;
+    type FuncDeclResult;
     type BlockItemResult;
     type VarDeclResult;
     type StmtResult;
     type ExprResult;
 
     fn visit_program(&mut self, program: Program) -> Self::ProgramResult;
-    fn visit_function_def(&mut self, function_def: FunctionDef) -> Self::FuncDefResult;
+    fn visit_function_decl(&mut self, function_def: FunctionDecl) -> Self::FuncDeclResult;
 
     fn visit_block_item(&mut self, block_item: BlockItem) -> Self::BlockItemResult;
 
@@ -169,6 +176,7 @@ pub trait ASTVisitor: StmtVisitor<Self::StmtResult> + ExprVisitor<Self::ExprResu
             Expr::Binary(binary) => self.visit_binary(binary),
             Expr::Comma(comma) => self.visit_comma(comma),
             Expr::Conditional(cond) => self.visit_conditional(cond),
+            Expr::FunctionCall(call) => self.visit_function_call(call),
             Expr::Literal(literal) => self.visit_literal(literal),
             Expr::Unary(unary) => self.visit_unary(unary),
             Expr::Var(name) => self.visit_var(name),
