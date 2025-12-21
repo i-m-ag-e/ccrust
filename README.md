@@ -7,8 +7,8 @@
 You can clone this repository and use `cargo` to build and run the compiler
 
 ```shell
-git clone https://github.com/i-m-ag-e/rustcc.git
-cd rustcc
+git clone https://github.com/i-m-ag-e/ccrust.git
+cd ccrust
 cargo run
 ```
 
